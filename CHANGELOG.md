@@ -2,9 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on Keep a Changelog and this project follows Semantic Versioning.
+This changelog is generated from git release history and commit history.
 
-## [0.1.0] - 2026-04-14 (Initial Release Draft)
+## [Unreleased]
+
+### Changed
+
+- Archived TODO roadmap into docs/BUILD.md (commit: bf26908).
+- Streamlined README and moved development-heavy content to DEVELOPMENT.md (commit: 0b701df).
+- Added dedicated installation method section in README (commit: c6bc59c).
+
+## [0.1.0] - 2026-04-14
 
 ### Added
 
@@ -23,8 +31,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Registrar lock get/save support.
 - Explicit unsupported responses for DNS operations.
 - QA automation script and Phase 7 evidence/checklist artifacts.
+- Module version constant surfaced in registrar logs.
 
 ### Notes
 
 - DNS record management is intentionally marked unsupported in the current module implementation.
-- Final release tagging and WHMCS runtime regression evidence should be completed before publishing the first production tag.
+- Release commit: c40a23c ("Release 0.1.0").
