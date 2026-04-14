@@ -21,6 +21,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 | Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
 | Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
 | Sync | porkbun_Sync | Supported | Includes renewal-date guardrails |
+| Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button to manually sync expiry date and domain status |
 | Get Nameservers | porkbun_GetNameservers | Supported | Maps nameserver list to ns1..ns5 |
 | Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
 | Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
@@ -69,6 +70,12 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - EPP code availability is TLD and registry policy dependent.
 - Registrar lock behavior can vary by TLD policy.
 - Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
+
+## Admin Sync Button
+
+- A Registrar Commands button named `Sync Expiry and Status` is exposed in the WHMCS domain admin view.
+- The command runs a manual sync against Porkbun for domains transferred from another registrar.
+- The sync updates both expiry date and domain status fields in the WHMCS sync response.
 
 ## Documentation
 

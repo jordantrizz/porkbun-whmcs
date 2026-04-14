@@ -28,6 +28,8 @@ Primary exported functions:
 - porkbun_TransferDomain
 - porkbun_RenewDomain
 - porkbun_Sync
+- porkbun_AdminCustomButtonArray
+- porkbun_syncnow
 - porkbun_GetNameservers
 - porkbun_SaveNameservers
 - porkbun_GetContactDetails

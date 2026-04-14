@@ -239,6 +239,18 @@ function porkbun_getConfigArray(): array
 }
 
 /**
+ * Add custom registrar command buttons shown in WHMCS admin domain view.
+ *
+ * @return array<string, string>
+ */
+function porkbun_AdminCustomButtonArray(): array
+{
+    return [
+        'Sync Expiry and Status' => 'syncnow',
+    ];
+}
+
+/**
  * Allows admins to verify API credentials from module settings.
  *
  * @param array<string, mixed> $params
@@ -469,6 +481,45 @@ function porkbun_Sync(array $params): array
     }
 
     return $syncResponse;
+}
+
+/**
+ * Manual admin sync command for transferred domains.
+ *
+ * @param array<string, mixed> $params
+ * @return array{success: bool, error?: string}
+ */
+function porkbun_syncnow(array $params): array
+{
+    $domain = porkbun_getDomainName($params);
+    if ($domain === null) {
+        return porkbun_errorResponse('Configuration error: missing required domain information.');
+    }
+
+    $syncResult = porkbun_Sync($params);
+
+    porkbun_logModuleCall(
+        $params,
+        'ManualSyncNow',
+        [
+            'operation' => 'ManualSyncNow',
+            'domain' => $domain,
+        ],
+        [
+            'success' => !isset($syncResult['error']),
+            'expirydate' => (string) ($syncResult['expirydate'] ?? ''),
+            'active' => (bool) ($syncResult['active'] ?? false),
+            'expired' => (bool) ($syncResult['expired'] ?? false),
+            'transferredAway' => (bool) ($syncResult['transferredAway'] ?? false),
+            'error' => (string) ($syncResult['error'] ?? ''),
+        ]
+    );
+
+    if (isset($syncResult['error'])) {
+        return porkbun_errorResponse((string) $syncResult['error']);
+    }
+
+    return porkbun_successResponse();
 }
 
 /**
