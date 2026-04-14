@@ -306,6 +306,43 @@ Release artifacts in this repository:
 6. Run the module Test Connection action.
 7. Run a domain sync in development and verify renewal date updates.
 
+## Installation Method
+
+Use this method to install the module into an existing WHMCS instance.
+
+### Fresh Install
+
+1. Back up your WHMCS files and database.
+2. Create module directory:
+- modules/registrars/porkbun/
+3. Copy these repository contents into that directory:
+- porkbun.php
+- src/
+4. Ensure file permissions match your WHMCS/PHP runtime requirements.
+5. In WHMCS admin, go to:
+- Configuration > System Settings > Domain Registrars
+6. Activate the Porkbun registrar module.
+7. Enter API Key and Secret API Key.
+8. Configure timeout/debug settings.
+9. Run Test Connection.
+10. Assign Porkbun as registrar on a test TLD and validate register/transfer/renew/sync behavior.
+
+### Upgrade Install
+
+1. Back up current module files and WHMCS database.
+2. Replace files in:
+- modules/registrars/porkbun/
+3. Keep existing registrar settings in WHMCS (credentials are stored in WHMCS config).
+4. Re-run Test Connection.
+5. Run a domain sync and verify renewal-date behavior is unchanged.
+6. Verify nameserver and contact operations on a test domain after upgrade.
+
+### Rollback Method
+
+1. Restore previous module files from backup.
+2. Re-test Test Connection and one domain sync operation.
+3. Confirm reminder/invoice timing still aligns with expected renewal date.
+
 ## Initial Release Notes (Draft)
 
 See CHANGELOG.md for the initial release entry.
