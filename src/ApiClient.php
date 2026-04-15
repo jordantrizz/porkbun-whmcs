@@ -54,8 +54,8 @@ final class ApiClient
      * @return array{
      *   success: bool,
      *   data?: array<string, mixed>,
-     *   error?: array{type: string, message: string, statusCode?: int},
-     *   context: array{operation: string, endpoint: string, durationMs: int, statusCode: int, correlationId: string}
+        *   error?: array{type: string, message: string, statusCode?: int, apiStatus?: string, apiMessage?: string},
+        *   context: array{operation: string, endpoint: string, durationMs: int, statusCode: int, correlationId: string, fullUrl?: string}
      * }
      */
     public function request(string $operation, string $endpoint, array $payload = []): array
@@ -172,15 +172,23 @@ final class ApiClient
         }
 
         if ($statusCode < 200 || $statusCode >= 300) {
-            $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId);
+            $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId, $url);
+            $apiStatus = isset($decoded['status']) ? strtolower((string) $decoded['status']) : '';
+            $apiMessage = $this->extractApiMessage($decoded);
+            $httpMessage = 'API returned non-success HTTP status (' . $statusCode . ').';
+            if ($apiMessage !== null) {
+                $httpMessage .= ' API message: ' . $apiMessage;
+            }
             self::recordMetric($operation, $context['durationMs'], false, 'http');
 
             return [
                 'success' => false,
                 'error' => [
                     'type' => 'http',
-                    'message' => 'API returned non-success HTTP status.',
+                    'message' => $httpMessage,
                     'statusCode' => $statusCode,
+                    'apiStatus' => $apiStatus,
+                    'apiMessage' => $apiMessage ?? '',
                 ],
                 'data' => $decoded,
                 'context' => $context,
@@ -190,7 +198,7 @@ final class ApiClient
         $apiStatus = isset($decoded['status']) ? strtolower((string) $decoded['status']) : '';
         if ($apiStatus !== '' && $apiStatus !== 'success') {
             $apiMessage = isset($decoded['message']) ? (string) $decoded['message'] : 'Porkbun API returned an error status.';
-            $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId);
+            $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId, $url);
             self::recordMetric($operation, $context['durationMs'], false, 'api');
 
             return [
@@ -205,7 +213,7 @@ final class ApiClient
             ];
         }
 
-        $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId);
+        $context = $this->buildContext($operation, $endpoint, $startedAt, $statusCode, $correlationId, $url);
         self::recordMetric($operation, $context['durationMs'], true, null);
 
         return [
@@ -290,17 +298,52 @@ final class ApiClient
     }
 
     /**
-     * @return array{operation: string, endpoint: string, durationMs: int, statusCode: int, correlationId: string}
+     * @return array{operation: string, endpoint: string, durationMs: int, statusCode: int, correlationId: string, fullUrl?: string}
      */
-    private function buildContext(string $operation, string $endpoint, float $startedAt, int $statusCode, string $correlationId): array
+    private function buildContext(
+        string $operation,
+        string $endpoint,
+        float $startedAt,
+        int $statusCode,
+        string $correlationId,
+        ?string $fullUrl = null
+    ): array
     {
-        return [
+        $context = [
             'operation' => $operation,
             'endpoint' => $endpoint,
             'durationMs' => (int) round((microtime(true) - $startedAt) * 1000),
             'statusCode' => $statusCode,
             'correlationId' => $correlationId,
         ];
+
+        if ($fullUrl !== null && $fullUrl !== '') {
+            $context['fullUrl'] = $fullUrl;
+        }
+
+        return $context;
+    }
+
+    /**
+     * @param array<string, mixed> $decoded
+     */
+    private function extractApiMessage(array $decoded): ?string
+    {
+        if (isset($decoded['message']) && is_string($decoded['message'])) {
+            $message = trim($decoded['message']);
+            if ($message !== '') {
+                return $message;
+            }
+        }
+
+        if (isset($decoded['error']) && is_string($decoded['error'])) {
+            $message = trim($decoded['error']);
+            if ($message !== '') {
+                return $message;
+            }
+        }
+
+        return null;
     }
 
     private function newCorrelationId(): string

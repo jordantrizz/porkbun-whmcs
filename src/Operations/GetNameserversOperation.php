@@ -22,6 +22,7 @@ final class GetNameserversOperation
 
         if (($response['success'] ?? false) !== true) {
             $error = is_array($response['error'] ?? null) ? $response['error'] : [];
+            $apiResponse = is_array($response['data'] ?? null) ? $response['data'] : [];
 
             return [
                 'success' => false,
@@ -30,6 +31,9 @@ final class GetNameserversOperation
                     'request' => $response['context'] ?? [],
                     'errorType' => (string) ($error['type'] ?? 'unknown'),
                     'statusCode' => (int) ($error['statusCode'] ?? 0),
+                    'apiStatus' => (string) ($error['apiStatus'] ?? ''),
+                    'apiMessage' => (string) ($error['apiMessage'] ?? ''),
+                    'apiResponse' => $apiResponse,
                 ],
                 'request' => [
                     'operation' => 'GetNameservers',
