@@ -3,7 +3,7 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
-use PorkbunWhmcs\Registrar\LockStatusCache;
+use PorkbunWhmcs\Registrar\DomainCache;
 
 final class SaveRegistrarLockOperation
 {
@@ -42,10 +42,11 @@ final class SaveRegistrarLockOperation
             ];
         }
 
-        $ttl = $cacheTtlSeconds ?? LockStatusCache::defaultTtlSeconds();
-        LockStatusCache::put(
+        $ttl = $cacheTtlSeconds ?? DomainCache::defaultTtlSeconds();
+        DomainCache::put(
             $client->getCredentialFingerprint(),
             strtolower(trim($domain)),
+            'lock',
             $lockEnabled,
             $ttl
         );

@@ -22,6 +22,10 @@ Use this checklist against a WHMCS development instance with a configured Porkbu
 : Confirm WHMCS next reminder/invoice timing aligns to synced renewal date.
 - [ ] Nameserver read/write
 : Save nameservers and read back to confirm round-trip consistency.
+- [ ] Registrar lock read uses cache or list hydration only
+: Clear cache, run lock read, and confirm the module uses listAll hydration or cache without any unsupported direct endpoint call.
+- [ ] Registrar lock write-through cache update
+: Toggle lock state and confirm a follow-up lock read reflects the updated value.
 
 ## Additional Phase 7 Checks
 

@@ -12,6 +12,7 @@ This changelog is generated from git release history and commit history.
 - Streamlined README and moved development-heavy content to DEVELOPMENT.md (commit: 0b701df).
 - Added dedicated installation method section in README (commit: c6bc59c).
 - Added persistent registrar lock cache with `/domain/listAll` hydration and TTL configuration.
+- Removed the unsupported direct registrar lock lookup fallback and now return lock state from cache or hydrated domain-list data.
 
 ## [0.1.0] - 2026-04-14
 

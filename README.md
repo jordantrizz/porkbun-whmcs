@@ -15,19 +15,19 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 
 | WHMCS Registrar Operation | Module Function | Status | Notes |
 | --- | --- | --- | --- |
-| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, lock cache TTL, debug logging |
+| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, domain cache TTL, refresh cooldown, debug logging |
 | Test Connection | porkbun_TestConnection | Supported | Uses Porkbun ping endpoint |
 | Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
 | Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
 | Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
 | Sync | porkbun_Sync | Supported | Includes renewal-date guardrails |
 | Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button to manually sync expiry date and domain status |
-| Get Nameservers | porkbun_GetNameservers | Supported | Maps nameserver list to ns1..ns5 |
+| Get Nameservers | porkbun_GetNameservers | Supported | Cache-first nameserver lookup with stale-while-revalidate |
 | Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
 | Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
 | Save Contact Details | porkbun_SaveContactDetails | Supported | Maps WHMCS contacts to API payload |
 | Get EPP Code | porkbun_GetEPPCode | Supported | TLD-dependent on registry support |
-| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup with listAll hydration |
+| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup with stale-while-revalidate |
 | Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping with cache write-through |
 | Get DNS | porkbun_GetDNS | Not supported | Returns explicit limitation error |
 | Save DNS | porkbun_SaveDNS | Not supported | Returns explicit limitation error |
@@ -46,7 +46,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - Configuration > System Settings > Domain Registrars
 5. Activate the Porkbun registrar module.
 6. Enter API Key and Secret API Key.
-7. Configure timeout, lock cache TTL, and debug logging as needed.
+7. Configure timeout, domain cache TTL, refresh cooldown, and debug logging as needed.
 8. Run Test Connection.
 9. Validate register, transfer, renew, and sync in a test environment.
 
@@ -72,13 +72,16 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - Registrar lock behavior can vary by TLD policy.
 - Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
 
-## Lock Status Caching
+## Domain Cache
 
-- Lock reads use a persistent WHMCS DB cache (`mod_porkbun_lock_cache`) keyed by domain and credential fingerprint.
-- Cache default TTL is 3600 seconds and can be changed with module setting `Lock Cache TTL`.
-- On cache miss or stale data, the module hydrates lock states via `/domain/listAll` and writes results back to cache.
-- Successful lock updates (`SaveRegistrarLock`) immediately update cache to reduce stale reads.
-- If listAll hydration fails, the module falls back to direct `/domain/getLock/{domain}` lookup.
+- Domain reads use a persistent WHMCS DB cache (`mod_porkbun_domain_cache`) keyed by account fingerprint, domain, and data type.
+- Current cached data types: `lock`, `nameservers`.
+- Cache default TTL is 3600 seconds and can be changed with module setting `Domain Cache TTL`.
+- Stale-while-revalidate behavior:
+	- stale entries are returned immediately for non-blocking reads
+	- stale/missing reads enqueue refresh work in `mod_porkbun_domain_refresh_queue`
+	- queue processing hydrates from `/domain/listAll` and writes back to cache
+- Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
 
 ## Admin Sync Button
 

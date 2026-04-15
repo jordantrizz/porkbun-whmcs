@@ -47,8 +47,9 @@ Current config fields in module settings:
 - API Key
 - Secret API Key
 - Request Timeout
-- Lock Cache TTL
-- Lock Cache Status
+- Domain Cache TTL
+- Refresh Queue Cooldown
+- Domain Cache Status
 - Enable Debug Logging
 
 Guidance:
@@ -70,57 +71,57 @@ Guidance:
 - Nameserver output mapped to WHMCS ns1..ns5 format.
 - Contact objects mapped between WHMCS contact shape and Porkbun payload fields.
 - Sync maps registry expiry information to WHMCS expirydate with regression guardrails.
-- Registrar lock reads are cache-first and hydrate via `/domain/listAll` when cache is stale/missing.
+- Registrar lock and nameserver reads are cache-first with stale-while-revalidate behavior.
 
-## Lock Cache
+## Domain Cache
 
-- Storage class: [src/LockStatusCache.php](src/LockStatusCache.php)
-- Storage table: `mod_porkbun_lock_cache` (auto-created on first use)
-- Key: (`account_hash`, `domain`)
+- Storage class: [src/DomainCache.php](src/DomainCache.php)
+- Storage table: `mod_porkbun_domain_cache` (auto-created on first use)
+- Key: (`account_hash`, `domain`, `data_type`)
+- Queue class: [src/DomainRefreshQueue.php](src/DomainRefreshQueue.php)
+- Queue table: `mod_porkbun_domain_refresh_queue`
 - Account partitioning: `account_hash` is a SHA-256 fingerprint of API key + secret from `ApiClient::getCredentialFingerprint()`.
-- Cached columns:
-	- `lock_enabled` (`0|1`)
+- Cached data types in current implementation:
+	- `lock` (bool)
+	- `nameservers` (array<string>)
+- Freshness columns:
 	- `fetched_at` (unix timestamp)
+	- `stale_at` (unix timestamp)
 	- `expires_at` (unix timestamp)
 	- `created_at`, `updated_at`
-- Indexes:
-	- unique index on (`account_hash`, `domain`)
-	- non-unique index on `expires_at`
-- Default TTL: 3600 seconds (`Lock Cache TTL` setting overrides per module config; minimum effective TTL is 60 seconds in cache writer)
+- Default TTL: 3600 seconds (`Domain Cache TTL` setting overrides per module config; minimum effective TTL is 60 seconds in writer)
 - Expired-row cleanup: opportunistic cleanup runs during writes (approx. 1% of writes), deleting entries older than one day past `expires_at`.
 
-### Lock Read Flow
+### Cache Read Flow
 
-1. `porkbun_GetRegistrarLock` passes configured TTL into `GetRegistrarLockOperation::execute`.
-2. Operation checks `LockStatusCache::getFresh(account_hash, domain)` first.
-3. On cache miss/stale:
-	 - call `/domain/listAll` with pagination (`start` increments by 1000)
-	 - extract domain + lock status candidates from returned structures
-	 - bulk upsert rows via `LockStatusCache::putMany`
-4. Re-check cache for requested domain.
-5. If still unresolved or listAll fails, fallback to direct `/domain/getLock/{domain}`.
-6. Successful direct fallback is written back with `LockStatusCache::put`.
+1. `porkbun_GetRegistrarLock` and `porkbun_GetNameservers` check `DomainCache` first.
+2. Fresh cache entries return immediately.
+3. Stale cache entries return immediately and enqueue non-blocking refresh jobs.
+4. Cache misses enqueue non-blocking refresh jobs and return safe operation responses.
 
-### Lock Write Flow
+### Refresh Queue Flow
 
-1. `porkbun_SaveRegistrarLock` passes configured TTL into `SaveRegistrarLockOperation::execute`.
-2. After successful `/domain/updateLock/{domain}`, operation performs write-through cache update for the same domain.
+1. Queue requests are deduplicated by (`account_hash`, `data_type`) with cooldown window.
+2. Queue processor function `porkbun_ProcessDomainCacheRefreshQueue` claims jobs and runs shared hydration.
+3. Shared hydrator [src/Operations/HydrateDomainCacheFromListAllOperation.php](src/Operations/HydrateDomainCacheFromListAllOperation.php) fetches `/domain/listAll` and updates both lock and nameserver cache entries.
+4. Successful jobs are removed; failures are retried with backoff and eventually marked failed.
 
 ### Settings Page Cache Controls
 
 - Implemented in [porkbun.php](porkbun.php) via:
 	- `porkbun_renderCacheStatusField()`
 	- `porkbun_handleCacheSettingsAction()`
-- `Lock Cache Status` field displays:
+- `Domain Cache Status` field displays:
 	- last cache refresh time (UTC)
 	- cached record count
+	- queued refresh job count
 - Includes `Clear Cache` button in admin settings context.
 - Clear action security:
 	- accepts POST only
 	- checks admin area context
 	- validates WHMCS session token (`token`)
 - Clear action behavior:
-	- executes `LockStatusCache::clearAll()`
+	- executes `DomainCache::clearAll()`
 	- displays inline success/error feedback in settings field HTML
 
 ### Operational Notes

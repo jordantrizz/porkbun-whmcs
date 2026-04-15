@@ -3,6 +3,8 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\DomainCache;
+use PorkbunWhmcs\Registrar\DomainRefreshQueue;
 
 final class GetNameserversOperation
 {
@@ -17,54 +19,60 @@ final class GetNameserversOperation
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain): array
+    public static function execute(ApiClient $client, string $domain, ?int $refreshCooldownSeconds = null): array
     {
-        $endpoint = '/domain/getNs/' . $domain;
-        $response = $client->request('GetNameservers', $endpoint, []);
+        $normalizedDomain = strtolower(trim($domain));
+        $accountHash = $client->getCredentialFingerprint();
+        $cached = DomainCache::get($accountHash, $normalizedDomain, 'nameservers');
 
-        if (($response['success'] ?? false) !== true) {
-            $error = is_array($response['error'] ?? null) ? $response['error'] : [];
-            $apiResponse = is_array($response['data'] ?? null) ? $response['data'] : [];
-            $apiCode = self::extractApiCode($apiResponse);
-            $isApiOptInWarning = $apiCode === 'DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS';
-            $warningMessage = 'Nameserver sync warning for ' . $domain . ': domain is not opted in to API access at Porkbun. '
-                . 'Using existing WHMCS nameserver values.';
+        if (is_array($cached)) {
+            $nameservers = self::normalizeNameservers($cached['value'] ?? null);
+            if ($nameservers !== []) {
+                $isStale = (string) ($cached['freshness'] ?? '') === 'stale';
+                $queued = false;
+                if ($isStale) {
+                    $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds);
+                }
 
-            return [
-                'success' => false,
-                'details' => (string) ($error['message'] ?? 'Get nameservers request failed.'),
-                'warning' => $isApiOptInWarning ? $warningMessage : '',
-                'warningCode' => $isApiOptInWarning ? $apiCode : '',
-                'context' => [
-                    'request' => $response['context'] ?? [],
-                    'errorType' => (string) ($error['type'] ?? 'unknown'),
-                    'statusCode' => (int) ($error['statusCode'] ?? 0),
-                    'apiStatus' => (string) ($error['apiStatus'] ?? ''),
-                    'apiMessage' => (string) ($error['apiMessage'] ?? ''),
-                    'apiCode' => $apiCode,
-                    'apiResponse' => $apiResponse,
-                ],
-                'request' => [
-                    'operation' => 'GetNameservers',
-                    'endpoint' => $endpoint,
-                    'payload' => [],
-                ],
-            ];
+                return [
+                    'success' => true,
+                    'nameservers' => $nameservers,
+                    'context' => [
+                        'request' => [
+                            'operation' => 'GetNameservers',
+                            'endpoint' => '/domain/listAll',
+                        ],
+                        'count' => count($nameservers),
+                        'source' => $isStale ? 'cache-stale' : 'cache',
+                        'refreshQueued' => $queued,
+                    ],
+                    'request' => [
+                        'operation' => 'GetNameservers',
+                        'endpoint' => '/domain/listAll',
+                        'payload' => [],
+                    ],
+                ];
+            }
         }
 
-        $data = is_array($response['data'] ?? null) ? $response['data'] : [];
-        $nameservers = self::extractNameservers($data);
+        $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds);
 
         return [
-            'success' => true,
-            'nameservers' => $nameservers,
+            'success' => false,
+            'details' => 'Nameserver cache is not populated yet. Refresh has been queued.',
+            'warning' => 'Nameserver cache refresh has been queued. Using existing WHMCS nameserver values.',
+            'warningCode' => 'CACHE_REFRESH_QUEUED',
             'context' => [
-                'request' => $response['context'] ?? [],
-                'count' => count($nameservers),
+                'request' => [
+                    'operation' => 'GetNameservers',
+                    'endpoint' => '/domain/listAll',
+                ],
+                'source' => 'cache-miss',
+                'refreshQueued' => $queued,
             ],
             'request' => [
                 'operation' => 'GetNameservers',
-                'endpoint' => $endpoint,
+                'endpoint' => '/domain/listAll',
                 'payload' => [],
             ],
         ];
@@ -113,12 +121,26 @@ final class GetNameserversOperation
     /**
      * @param array<string, mixed> $data
      */
-    private static function extractApiCode(array $data): string
+    private static function normalizeNameservers($value): array
     {
-        if (!isset($data['code']) || !is_string($data['code'])) {
-            return '';
+        if (!is_array($value)) {
+            return [];
         }
 
-        return strtoupper(trim($data['code']));
+        $normalized = [];
+        foreach ($value as $item) {
+            if (!is_string($item)) {
+                continue;
+            }
+
+            $candidate = strtolower(trim($item));
+            if ($candidate === '') {
+                continue;
+            }
+
+            $normalized[] = $candidate;
+        }
+
+        return array_values(array_unique($normalized));
     }
  }

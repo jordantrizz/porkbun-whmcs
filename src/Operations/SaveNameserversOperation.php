@@ -3,6 +3,7 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\DomainCache;
 
 final class SaveNameserversOperation
 {
@@ -39,6 +40,14 @@ final class SaveNameserversOperation
                 ],
             ];
         }
+
+        DomainCache::put(
+            $client->getCredentialFingerprint(),
+            strtolower(trim($domain)),
+            'nameservers',
+            array_values(array_unique(array_map('strtolower', $nameservers))),
+            DomainCache::defaultTtlSeconds()
+        );
 
         return [
             'success' => true,

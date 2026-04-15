@@ -10,7 +10,8 @@ if (!defined('PORKBUN_MODULE_VERSION')) {
 
 require_once __DIR__ . '/src/ApiClient.php';
 require_once __DIR__ . '/src/Errors.php';
-require_once __DIR__ . '/src/LockStatusCache.php';
+require_once __DIR__ . '/src/DomainCache.php';
+require_once __DIR__ . '/src/DomainRefreshQueue.php';
 require_once __DIR__ . '/src/Mapper.php';
 require_once __DIR__ . '/src/Operations/RegisterDomainOperation.php';
 require_once __DIR__ . '/src/Operations/TransferDomainOperation.php';
@@ -23,9 +24,11 @@ require_once __DIR__ . '/src/Operations/SaveContactDetailsOperation.php';
 require_once __DIR__ . '/src/Operations/GetEppCodeOperation.php';
 require_once __DIR__ . '/src/Operations/GetRegistrarLockOperation.php';
 require_once __DIR__ . '/src/Operations/SaveRegistrarLockOperation.php';
+require_once __DIR__ . '/src/Operations/HydrateDomainCacheFromListAllOperation.php';
 
 use PorkbunWhmcs\Registrar\ApiClient;
-use PorkbunWhmcs\Registrar\LockStatusCache;
+use PorkbunWhmcs\Registrar\DomainCache;
+use PorkbunWhmcs\Registrar\DomainRefreshQueue;
 use PorkbunWhmcs\Registrar\Mapper;
 use PorkbunWhmcs\Registrar\Operations\RegisterDomainOperation;
 use PorkbunWhmcs\Registrar\Operations\RenewDomainOperation;
@@ -37,6 +40,7 @@ use PorkbunWhmcs\Registrar\Operations\GetContactDetailsOperation;
 use PorkbunWhmcs\Registrar\Operations\SaveContactDetailsOperation;
 use PorkbunWhmcs\Registrar\Operations\GetEppCodeOperation;
 use PorkbunWhmcs\Registrar\Operations\GetRegistrarLockOperation;
+use PorkbunWhmcs\Registrar\Operations\HydrateDomainCacheFromListAllOperation;
 use PorkbunWhmcs\Registrar\Operations\SaveRegistrarLockOperation;
 
 /**
@@ -86,9 +90,19 @@ function porkbun_getTimeout(array $params, int $default = 20): int
  */
 function porkbun_getLockCacheTtl(array $params): int
 {
-    $ttl = isset($params['lockCacheTtl']) ? (int) $params['lockCacheTtl'] : LockStatusCache::defaultTtlSeconds();
+    $ttl = isset($params['lockCacheTtl']) ? (int) $params['lockCacheTtl'] : DomainCache::defaultTtlSeconds();
 
-    return $ttl > 0 ? $ttl : LockStatusCache::defaultTtlSeconds();
+    return $ttl > 0 ? $ttl : DomainCache::defaultTtlSeconds();
+}
+
+/**
+ * @param array<string, mixed> $params
+ */
+function porkbun_getCacheRefreshCooldown(array $params): int
+{
+    $cooldown = isset($params['cacheRefreshCooldown']) ? (int) $params['cacheRefreshCooldown'] : 300;
+
+    return $cooldown > 0 ? $cooldown : 300;
 }
 
 /**
@@ -238,7 +252,7 @@ function porkbun_handleCacheSettingsAction(): void
         return;
     }
 
-    $deleted = LockStatusCache::clearAll();
+    $deleted = DomainCache::clearAll();
     $GLOBALS['porkbunCacheStatusMessage'] = [
         'type' => 'success',
         'text' => 'Cache cleared. Removed ' . $deleted . ' cached record(s).',
@@ -247,7 +261,8 @@ function porkbun_handleCacheSettingsAction(): void
 
 function porkbun_renderCacheStatusField(): string
 {
-    $stats = LockStatusCache::getStats();
+    $stats = DomainCache::getStats();
+    $queueStats = DomainRefreshQueue::getStats();
     $totalRecords = (int) ($stats['totalRecords'] ?? 0);
     $lastFetchedAt = $stats['lastFetchedAt'] ?? null;
     $lastUpdatedText = 'Never';
@@ -283,6 +298,7 @@ function porkbun_renderCacheStatusField(): string
     return '<div>'
         . '<div>Last Cache Refresh: <strong>' . htmlspecialchars($lastUpdatedText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
         . '<div>Cached Records: <strong>' . $totalRecords . '</strong></div>'
+        . '<div>Queued Refresh Jobs: <strong>' . (int) ($queueStats['pending'] ?? 0) . '</strong></div>'
         . $formHtml
         . $messageHtml
         . '</div>';
@@ -322,14 +338,21 @@ function porkbun_getConfigArray(): array
             'Description' => 'Request timeout in seconds',
         ],
         'lockCacheTtl' => [
-            'FriendlyName' => 'Lock Cache TTL',
+            'FriendlyName' => 'Domain Cache TTL',
             'Type' => 'text',
             'Size' => '6',
-            'Default' => (string) LockStatusCache::defaultTtlSeconds(),
-            'Description' => 'Lock cache freshness window in seconds (default 3600)',
+            'Default' => (string) DomainCache::defaultTtlSeconds(),
+            'Description' => 'Cache freshness window in seconds before stale responses are served (default 3600)',
+        ],
+        'cacheRefreshCooldown' => [
+            'FriendlyName' => 'Refresh Queue Cooldown',
+            'Type' => 'text',
+            'Size' => '6',
+            'Default' => '300',
+            'Description' => 'Minimum seconds between repeated refresh queue requests for the same cache type.',
         ],
         'lockCacheStatus' => [
-            'FriendlyName' => 'Lock Cache Status',
+            'FriendlyName' => 'Domain Cache Status',
             'Type' => 'System',
             'Value' => porkbun_renderCacheStatusField(),
         ],
@@ -350,6 +373,7 @@ function porkbun_AdminCustomButtonArray(): array
 {
     return [
         'Sync Expiry and Status' => 'syncnow',
+        'Process Cache Refresh Queue' => 'processcachequeue',
     ];
 }
 
@@ -626,6 +650,32 @@ function porkbun_syncnow(array $params): array
 }
 
 /**
+ * Manual admin command to process queued cache refresh jobs.
+ *
+ * @param array<string, mixed> $params
+ * @return array{success: bool, error?: string}
+ */
+function porkbun_processcachequeue(array $params): array
+{
+    $result = porkbun_ProcessDomainCacheRefreshQueue($params);
+
+    porkbun_logModuleCall(
+        $params,
+        'ProcessDomainCacheRefreshQueue',
+        [
+            'operation' => 'ProcessDomainCacheRefreshQueue',
+        ],
+        $result
+    );
+
+    if (($result['success'] ?? false) !== true) {
+        return porkbun_errorResponse((string) ($result['details'] ?? 'Queue processing failed.'));
+    }
+
+    return porkbun_successResponse();
+}
+
+/**
  * @param array<string, mixed> $params
  * @return array{ns1?: string, ns2?: string, ns3?: string, ns4?: string, ns5?: string, warning?: string, error?: string}
  */
@@ -641,7 +691,7 @@ function porkbun_GetNameservers(array $params): array
         return ['error' => 'Configuration error: missing API credentials.'];
     }
 
-    $result = GetNameserversOperation::execute($client, $domain);
+    $result = GetNameserversOperation::execute($client, $domain, porkbun_getCacheRefreshCooldown($params));
 
     porkbun_logModuleCall(
         $params,
@@ -658,10 +708,10 @@ function porkbun_GetNameservers(array $params): array
 
     if (($result['success'] ?? false) !== true) {
         $warningCode = strtoupper(trim((string) ($result['warningCode'] ?? '')));
-        if ($warningCode === 'DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS') {
+        if ($warningCode === 'DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS' || $warningCode === 'CACHE_REFRESH_QUEUED') {
             $fallbackNameservers = porkbun_extractNameserversFromParams($params);
             $response = porkbun_mapNameserversToWhmcs($fallbackNameservers);
-            $response['warning'] = (string) ($result['warning'] ?? 'Nameserver sync warning: domain is not opted in to API access at Porkbun.');
+            $response['warning'] = (string) ($result['warning'] ?? 'Nameserver sync warning: cache refresh is queued and existing WHMCS values were used.');
 
             return $response;
         }
@@ -717,6 +767,70 @@ function porkbun_SaveNameservers(array $params): array
     }
 
     return porkbun_successResponse();
+}
+
+/**
+ * Queue processor for stale cache refresh jobs.
+ *
+ * @param array<string, mixed> $params
+ * @return array{success: bool, processed: int, failed: int, details: string}
+ */
+function porkbun_ProcessDomainCacheRefreshQueue(array $params): array
+{
+    $client = porkbun_createClientFromParams($params);
+    if ($client === null) {
+        return [
+            'success' => false,
+            'processed' => 0,
+            'failed' => 0,
+            'details' => 'Configuration error: missing API credentials.',
+        ];
+    }
+
+    $jobs = DomainRefreshQueue::claimBatch(5);
+    if ($jobs === []) {
+        return [
+            'success' => true,
+            'processed' => 0,
+            'failed' => 0,
+            'details' => 'No queued refresh jobs.',
+        ];
+    }
+
+    $processed = 0;
+    $failed = 0;
+    $ttl = porkbun_getLockCacheTtl($params);
+
+    foreach ($jobs as $job) {
+        $jobId = (int) ($job['id'] ?? 0);
+        $accountHash = (string) ($job['accountHash'] ?? '');
+        $attempts = (int) ($job['attempts'] ?? 0);
+        $type = strtolower(trim((string) ($job['dataType'] ?? '')));
+
+        if ($jobId <= 0 || $accountHash === '' || !in_array($type, ['lock', 'nameservers'], true)) {
+            $failed++;
+            continue;
+        }
+
+        $result = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
+        if (($result['success'] ?? false) === true) {
+            DomainRefreshQueue::complete($jobId);
+            $processed++;
+            continue;
+        }
+
+        DomainRefreshQueue::fail($jobId, (string) ($result['details'] ?? 'Refresh failed.'), $attempts);
+        $failed++;
+    }
+
+    return [
+        'success' => $failed === 0,
+        'processed' => $processed,
+        'failed' => $failed,
+        'details' => $failed === 0
+            ? ('Processed ' . $processed . ' cache refresh job(s).')
+            : ('Processed ' . $processed . ' job(s), ' . $failed . ' failed.'),
+    ];
 }
 
 /**
@@ -863,7 +977,12 @@ function porkbun_GetRegistrarLock(array $params): array
         return ['error' => 'Configuration error: missing API credentials.'];
     }
 
-    $result = GetRegistrarLockOperation::execute($client, $domain, porkbun_getLockCacheTtl($params));
+    $result = GetRegistrarLockOperation::execute(
+        $client,
+        $domain,
+        porkbun_getLockCacheTtl($params),
+        porkbun_getCacheRefreshCooldown($params)
+    );
 
     porkbun_logModuleCall(
         $params,
