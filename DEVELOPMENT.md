@@ -70,7 +70,7 @@ Guidance:
 - Domain input normalized to lowercase.
 - Nameserver output mapped to WHMCS ns1..ns5 format.
 - Contact objects mapped between WHMCS contact shape and Porkbun payload fields.
-- Sync maps registry expiry information to WHMCS expirydate with regression guardrails.
+- Sync maps registry expiry information from shared domain cache hydrated via `/domain/listAll` to WHMCS expirydate with regression guardrails.
 - Registrar lock and nameserver reads are cache-first with stale-while-revalidate behavior.
 
 ## Domain Cache
@@ -105,6 +105,9 @@ Guidance:
 2. Queue processor function `porkbun_ProcessDomainCacheRefreshQueue` claims jobs and runs shared hydration.
 3. Shared hydrator [src/Operations/HydrateDomainCacheFromListAllOperation.php](src/Operations/HydrateDomainCacheFromListAllOperation.php) fetches `/domain/listAll` and updates both lock and nameserver cache entries.
 4. Successful jobs are removed; failures are retried with backoff and eventually marked failed.
+5. Automatic processing is registered through WHMCS native `DailyCronJob` hook in [porkbun.php](porkbun.php).
+6. Cron credential resolution reads the module's configured settings from `tblregistrars` and matches queued jobs by `ApiClient::getCredentialFingerprint()`.
+7. If WHMCS exposes encrypted password values at rest, the resolver attempts `decrypt()` when available for `secretApiKey`.
 
 ### Settings Page Cache Controls
 

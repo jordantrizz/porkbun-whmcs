@@ -20,7 +20,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 | Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
 | Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
 | Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
-| Sync | porkbun_Sync | Supported | Includes renewal-date guardrails |
+| Sync | porkbun_Sync | Supported | Uses shared domain cache hydrated from `/domain/listAll` with renewal-date guardrails |
 | Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button to manually sync expiry date and domain status |
 | Get Nameservers | porkbun_GetNameservers | Supported | Cache-first nameserver lookup with stale-while-revalidate |
 | Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
@@ -82,12 +82,13 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 	- stale/missing reads enqueue refresh work in `mod_porkbun_domain_refresh_queue`
 	- queue processing hydrates from `/domain/listAll` and writes back to cache
 - Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
+- Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
 
 ## Admin Sync Button
 
 - A Registrar Commands button named `Sync Expiry and Status` is exposed in the WHMCS domain admin view.
 - The command runs a manual sync against Porkbun for domains transferred from another registrar.
-- The sync updates both expiry date and domain status fields in the WHMCS sync response.
+- The sync hydrates shared domain cache data from `/domain/listAll` and then resolves the requested domain from cache for expiry and status updates.
 
 ## Documentation
 

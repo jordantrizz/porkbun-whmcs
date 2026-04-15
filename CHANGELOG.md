@@ -13,6 +13,8 @@ This changelog is generated from git release history and commit history.
 - Added dedicated installation method section in README (commit: c6bc59c).
 - Added persistent registrar lock cache with `/domain/listAll` hydration and TTL configuration.
 - Removed the unsupported direct registrar lock lookup fallback and now return lock state from cache or hydrated domain-list data.
+- Replaced sync's unsupported direct domain lookup with `/domain/listAll` pagination for expiry and status sync.
+- Sync now hydrates all domains from `/domain/listAll` into shared cache and resolves per-domain sync data from cache.
 
 ## [0.1.0] - 2026-04-14
 

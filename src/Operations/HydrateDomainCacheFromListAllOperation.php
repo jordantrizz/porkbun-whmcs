@@ -92,6 +92,11 @@ final class HydrateDomainCacheFromListAllOperation
                 if ($nameservers !== []) {
                     $typedData[$domain]['nameservers'] = $nameservers;
                 }
+
+                $syncData = self::extractSyncData($item);
+                if ($syncData !== null) {
+                    $typedData[$domain]['sync'] = $syncData;
+                }
             }
         }
 
@@ -259,5 +264,81 @@ final class HydrateDomainCacheFromListAllOperation
         }
 
         return [];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return array<string, string>|null
+     */
+    private static function extractSyncData(array $data): ?array
+    {
+        $expiryDate = self::extractFirstString($data, [
+            ['expiryDate'],
+            ['expirationDate'],
+            ['expireDate'],
+            ['expiresAt'],
+            ['expires'],
+            ['domain', 'expiryDate'],
+            ['domain', 'expirationDate'],
+            ['domain', 'expireDate'],
+            ['domain', 'expiresAt'],
+            ['domain', 'expires'],
+        ]);
+
+        $status = self::extractFirstString($data, [
+            ['status'],
+            ['domainStatus'],
+            ['domain', 'status'],
+            ['domain', 'domainStatus'],
+        ]);
+
+        if ($expiryDate === null && $status === null) {
+            return null;
+        }
+
+        return [
+            'expiryDate' => $expiryDate ?? '',
+            'status' => $status ?? '',
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param array<int, array<int, string>> $candidatePaths
+     */
+    private static function extractFirstString(array $data, array $candidatePaths): ?string
+    {
+        foreach ($candidatePaths as $path) {
+            $value = self::getNestedValue($data, $path);
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $normalized = trim($value);
+            if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param array<int, string> $path
+     * @return mixed
+     */
+    private static function getNestedValue(array $data, array $path)
+    {
+        $cursor = $data;
+        foreach ($path as $segment) {
+            if (!is_array($cursor) || !array_key_exists($segment, $cursor)) {
+                return null;
+            }
+
+            $cursor = $cursor[$segment];
+        }
+
+        return $cursor;
     }
 }

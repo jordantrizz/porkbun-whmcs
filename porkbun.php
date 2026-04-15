@@ -139,6 +139,109 @@ function porkbun_createClientFromParams(array $params): ?ApiClient
 }
 
 /**
+ * @return array<string, array<string, mixed>>
+ */
+function porkbun_getCronCredentialContexts(array $params = []): array
+{
+    $contexts = [];
+
+    $directClient = porkbun_createClientFromParams($params);
+    if ($directClient instanceof ApiClient) {
+        $contexts[$directClient->getCredentialFingerprint()] = $params;
+
+        return $contexts;
+    }
+
+    $stored = porkbun_getStoredRegistrarSettings();
+    if ($stored === null) {
+        return [];
+    }
+
+    $storedClient = porkbun_createClientFromParams($stored);
+    if ($storedClient instanceof ApiClient) {
+        $contexts[$storedClient->getCredentialFingerprint()] = $stored;
+    }
+
+    return $contexts;
+}
+
+/**
+ * @return array<string, mixed>|null
+ */
+function porkbun_getStoredRegistrarSettings(): ?array
+{
+    if (!class_exists('\\WHMCS\\Database\\Capsule')) {
+        return null;
+    }
+
+    try {
+        $capsule = '\\WHMCS\\Database\\Capsule';
+        $schema = $capsule::schema();
+        if (!$schema->hasTable('tblregistrars')) {
+            return null;
+        }
+
+        $columns = $schema->getColumnListing('tblregistrars');
+        $settingColumn = in_array('setting', $columns, true)
+            ? 'setting'
+            : (in_array('setting_name', $columns, true) ? 'setting_name' : null);
+        $valueColumn = in_array('value', $columns, true)
+            ? 'value'
+            : (in_array('setting_value', $columns, true) ? 'setting_value' : null);
+
+        if ($settingColumn === null || $valueColumn === null) {
+            return null;
+        }
+
+        /** @var iterable<object> $rows */
+        $rows = $capsule::table('tblregistrars')
+            ->where('registrar', 'porkbun')
+            ->get();
+
+        $params = [];
+        foreach ($rows as $row) {
+            if (!is_object($row)) {
+                continue;
+            }
+
+            $key = isset($row->{$settingColumn}) ? trim((string) $row->{$settingColumn}) : '';
+            if ($key === '') {
+                continue;
+            }
+
+            $value = isset($row->{$valueColumn}) ? (string) $row->{$valueColumn} : '';
+            $params[$key] = porkbun_normalizeStoredRegistrarSettingValue($key, $value);
+        }
+
+        return $params !== [] ? $params : null;
+    } catch (\Throwable $exception) {
+        return null;
+    }
+}
+
+function porkbun_normalizeStoredRegistrarSettingValue(string $key, string $value): string
+{
+    if ($value === '') {
+        return '';
+    }
+
+    if ($key !== 'secretApiKey' || !function_exists('decrypt')) {
+        return $value;
+    }
+
+    try {
+        $decrypted = call_user_func('decrypt', $value);
+        if (is_string($decrypted) && trim($decrypted) !== '') {
+            return $decrypted;
+        }
+    } catch (\Throwable $exception) {
+        return $value;
+    }
+
+    return $value;
+}
+
+/**
  * @param array<string, mixed> $params
  */
 function porkbun_getYears(array $params): int
@@ -217,7 +320,8 @@ function porkbun_logModuleCall(array $params, string $action, array $request, ar
         return;
     }
 
-    logModuleCall(
+    call_user_func(
+        'logModuleCall',
         'porkbun',
         $action,
         ApiClient::redactContext($request + ['moduleVersion' => PORKBUN_MODULE_VERSION]),
@@ -571,14 +675,14 @@ function porkbun_Sync(array $params): array
     }
 
     $previousExpiryDate = porkbun_getPreviousExpiryDate($params);
-    $result = SyncDomainOperation::execute($client, $domain, $previousExpiryDate);
+    $result = SyncDomainOperation::execute($client, $domain, $previousExpiryDate, porkbun_getLockCacheTtl($params));
 
     porkbun_logModuleCall(
         $params,
         'Sync',
         is_array($result['request'] ?? null)
             ? $result['request']
-            : ['operation' => 'SyncDomain', 'endpoint' => '/domain/get/' . $domain],
+            : ['operation' => 'SyncDomain', 'endpoint' => '/domain/listAll'],
         [
             'success' => (bool) ($result['success'] ?? false),
             'details' => (string) ($result['details'] ?? ''),
@@ -775,10 +879,10 @@ function porkbun_SaveNameservers(array $params): array
  * @param array<string, mixed> $params
  * @return array{success: bool, processed: int, failed: int, details: string}
  */
-function porkbun_ProcessDomainCacheRefreshQueue(array $params): array
+function porkbun_ProcessDomainCacheRefreshQueue(array $params = []): array
 {
-    $client = porkbun_createClientFromParams($params);
-    if ($client === null) {
+    $contexts = porkbun_getCronCredentialContexts($params);
+    if ($contexts === []) {
         return [
             'success' => false,
             'processed' => 0,
@@ -799,7 +903,7 @@ function porkbun_ProcessDomainCacheRefreshQueue(array $params): array
 
     $processed = 0;
     $failed = 0;
-    $ttl = porkbun_getLockCacheTtl($params);
+    $clients = [];
 
     foreach ($jobs as $job) {
         $jobId = (int) ($job['id'] ?? 0);
@@ -812,6 +916,24 @@ function porkbun_ProcessDomainCacheRefreshQueue(array $params): array
             continue;
         }
 
+        if (!array_key_exists($accountHash, $contexts)) {
+            DomainRefreshQueue::fail($jobId, 'No matching Porkbun registrar credentials were available for queued refresh.', $attempts);
+            $failed++;
+            continue;
+        }
+
+        if (!isset($clients[$accountHash])) {
+            $clients[$accountHash] = porkbun_createClientFromParams($contexts[$accountHash]);
+        }
+
+        $client = $clients[$accountHash];
+        if (!$client instanceof ApiClient) {
+            DomainRefreshQueue::fail($jobId, 'Unable to initialize Porkbun API client for queued refresh.', $attempts);
+            $failed++;
+            continue;
+        }
+
+        $ttl = porkbun_getLockCacheTtl($contexts[$accountHash]);
         $result = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
         if (($result['success'] ?? false) === true) {
             DomainRefreshQueue::complete($jobId);
@@ -1087,4 +1209,29 @@ function porkbun_SaveDNS(array $params): array
     );
 
     return porkbun_errorResponse($message);
+}
+
+if (function_exists('add_hook')) {
+    call_user_func('add_hook', 'DailyCronJob', 1, function ($vars): void {
+        $result = porkbun_ProcessDomainCacheRefreshQueue();
+
+        if (!function_exists('logActivity')) {
+            return;
+        }
+
+        $processed = (int) ($result['processed'] ?? 0);
+        $failed = (int) ($result['failed'] ?? 0);
+        if ($processed < 1 && $failed < 1) {
+            return;
+        }
+
+        call_user_func(
+            'logActivity',
+            'Porkbun domain cache cron processed '
+            . $processed
+            . ' job(s) with '
+            . $failed
+            . ' failure(s).'
+        );
+    });
 }

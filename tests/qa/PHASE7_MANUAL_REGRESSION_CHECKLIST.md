@@ -17,7 +17,7 @@ Use this checklist against a WHMCS development instance with a configured Porkbu
 - [ ] Renew domain
 : Submit renewal and confirm success response handling.
 - [ ] Sync renewal/expiry date
-: Run domain sync and confirm `expirydate` is updated correctly.
+: Run domain sync and confirm `expirydate` is updated correctly from cache populated by `/domain/listAll` without any unsupported direct domain lookup.
 - [ ] Validate reminder and invoice timing after sync
 : Confirm WHMCS next reminder/invoice timing aligns to synced renewal date.
 - [ ] Nameserver read/write
