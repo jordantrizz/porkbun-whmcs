@@ -415,6 +415,10 @@ function porkbun_formatAdminSource(string $source): string
         return 'Registrar config page';
     }
 
+    if ($normalized === 'addon-page') {
+        return 'Cache Admin Page';
+    }
+
     if ($normalized === 'admin-command') {
         return 'Admin command';
     }
@@ -429,7 +433,7 @@ function porkbun_formatAdminSource(string $source): string
 /**
  * @return array{success: bool, details: string, domainsHydrated?: int, pagesFetched?: int}
  */
-function porkbun_generateCacheFromStoredSettings(): array
+function porkbun_generateCacheFromStoredSettings(string $source = 'settings-generate'): array
 {
     $stored = porkbun_getStoredRegistrarSettings();
     if ($stored === null) {
@@ -453,7 +457,7 @@ function porkbun_generateCacheFromStoredSettings(): array
         porkbun_getLockCacheTtl($stored)
     );
 
-    porkbun_recordCacheHydrationStatus($result, 'settings-generate');
+    porkbun_recordCacheHydrationStatus($result, $source);
 
     if (($result['success'] ?? false) !== true) {
         return [
@@ -472,91 +476,116 @@ function porkbun_generateCacheFromStoredSettings(): array
     ];
 }
 
-function porkbun_handleCacheSettingsAction(): void
+function porkbun_isValidAdminSecurityToken(string $providedToken): bool
 {
-    $isAdminArea = defined('ADMINAREA') && constant('ADMINAREA') === true;
-    if (!$isAdminArea) {
-        return;
-    }
-
-    if (!isset($_SERVER['REQUEST_METHOD']) || strtoupper((string) $_SERVER['REQUEST_METHOD']) !== 'POST') {
-        return;
-    }
-
-    $action = isset($_POST['porkbunCacheAction']) ? trim((string) $_POST['porkbunCacheAction']) : '';
-    if (!in_array($action, ['clear', 'generate'], true)) {
-        return;
-    }
-
-    $providedToken = isset($_POST['token']) ? (string) $_POST['token'] : '';
     $sessionToken = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
-    if ($providedToken === '' || $sessionToken === '' || !hash_equals($sessionToken, $providedToken)) {
-        $GLOBALS['porkbunCacheStatusMessage'] = [
-            'type' => 'error',
-            'text' => 'Cache clear request was rejected due to an invalid security token.',
-        ];
 
-        return;
-    }
-
-    if ($action === 'clear') {
-        $deleted = DomainCache::clearAll();
-        $GLOBALS['porkbunCacheStatusMessage'] = [
-            'type' => 'success',
-            'text' => 'Cache cleared. Removed ' . $deleted . ' cached record(s).',
-        ];
-
-        return;
-    }
-
-    $generated = porkbun_generateCacheFromStoredSettings();
-    $generatedDomains = (int) ($generated['domainsHydrated'] ?? 0);
-    $pagesFetched = (int) ($generated['pagesFetched'] ?? 0);
-    $messageText = (($generated['success'] ?? false) === true)
-        ? ('Cache generated successfully. Hydrated ' . $generatedDomains . ' cached record(s) across ' . max(1, $pagesFetched) . ' page(s).')
-        : (string) ($generated['details'] ?? 'Cache generation failed.');
-
-    $GLOBALS['porkbunCacheStatusMessage'] = [
-        'type' => (($generated['success'] ?? false) === true) ? 'success' : 'error',
-        'text' => $messageText,
-    ];
+    return $providedToken !== ''
+        && $sessionToken !== ''
+        && hash_equals($sessionToken, $providedToken);
 }
 
-function porkbun_renderCacheStatusField(): string
+/**
+ * @return array<string, mixed>
+ */
+function porkbun_getCacheAdminStatusData(): array
 {
     $stats = DomainCache::getStats();
     $queueStats = DomainRefreshQueue::getStats();
     $hydrationStatus = porkbun_getCacheHydrationStatus();
     $queueProcessorStatus = porkbun_getQueueProcessorStatus();
-    $totalRecords = (int) ($stats['totalRecords'] ?? 0);
-    $totalDomains = (int) ($stats['totalDomains'] ?? 0);
     $lastFetchedAt = $stats['lastFetchedAt'] ?? null;
-    $lastUpdatedText = porkbun_formatAdminTimestamp($lastFetchedAt);
-    $lastHydrationText = porkbun_formatAdminTimestamp(
-        isset($hydrationStatus['lastSuccessAt']) ? (int) $hydrationStatus['lastSuccessAt'] : null,
-        $lastUpdatedText
-    );
-    $lastQueueRunText = porkbun_formatAdminTimestamp(isset($queueProcessorStatus['lastRunAt']) ? (int) $queueProcessorStatus['lastRunAt'] : null);
-    $automaticProcessingText = function_exists('add_hook')
-        ? 'Hook registered. Execution depends on the WHMCS automation cron running DailyCronJob.'
-        : 'Unavailable because WHMCS hook registration is not available.';
-    $nextRunText = 'Controlled by the WHMCS automation cron schedule. Exact next run timing is not exposed by this module.';
-    $lastHydrationSource = porkbun_formatAdminSource((string) ($hydrationStatus['lastSource'] ?? ''));
-    $lastQueueSource = porkbun_formatAdminSource((string) ($queueProcessorStatus['lastSource'] ?? ''));
-    $lastHydrationDetails = trim((string) ($hydrationStatus['lastDetails'] ?? ''));
-    $lastQueueDetails = trim((string) ($queueProcessorStatus['lastDetails'] ?? ''));
-    $lastHydrationPages = (int) ($hydrationStatus['lastPagesFetched'] ?? 0);
-    $lastHydratedRecords = (int) ($hydrationStatus['lastDomainsHydrated'] ?? 0);
-    $lastQueueProcessed = (int) ($queueProcessorStatus['lastProcessed'] ?? 0);
-    $lastQueueFailed = (int) ($queueProcessorStatus['lastFailed'] ?? 0);
+
+    return [
+        'totalRecords' => (int) ($stats['totalRecords'] ?? 0),
+        'totalDomains' => (int) ($stats['totalDomains'] ?? 0),
+        'lastUpdatedText' => porkbun_formatAdminTimestamp($lastFetchedAt),
+        'lastHydrationText' => porkbun_formatAdminTimestamp(
+            isset($hydrationStatus['lastSuccessAt']) ? (int) $hydrationStatus['lastSuccessAt'] : null,
+            porkbun_formatAdminTimestamp($lastFetchedAt)
+        ),
+        'lastHydrationSource' => porkbun_formatAdminSource((string) ($hydrationStatus['lastSource'] ?? '')),
+        'lastHydrationDetails' => trim((string) ($hydrationStatus['lastDetails'] ?? '')),
+        'lastHydrationPages' => (int) ($hydrationStatus['lastPagesFetched'] ?? 0),
+        'lastHydratedRecords' => (int) ($hydrationStatus['lastDomainsHydrated'] ?? 0),
+        'queuePending' => (int) ($queueStats['pending'] ?? 0),
+        'queueProcessing' => (int) ($queueStats['processing'] ?? 0),
+        'queueFailed' => (int) ($queueStats['failed'] ?? 0),
+        'automaticProcessingText' => function_exists('add_hook')
+            ? 'Hook registered. Execution depends on the WHMCS automation cron running DailyCronJob.'
+            : 'Unavailable because WHMCS hook registration is not available.',
+        'lastQueueRunText' => porkbun_formatAdminTimestamp(isset($queueProcessorStatus['lastRunAt']) ? (int) $queueProcessorStatus['lastRunAt'] : null),
+        'lastQueueSource' => porkbun_formatAdminSource((string) ($queueProcessorStatus['lastSource'] ?? '')),
+        'lastQueueDetails' => trim((string) ($queueProcessorStatus['lastDetails'] ?? '')),
+        'lastQueueProcessed' => (int) ($queueProcessorStatus['lastProcessed'] ?? 0),
+        'lastQueueFailed' => (int) ($queueProcessorStatus['lastFailed'] ?? 0),
+        'nextRunText' => 'Controlled by the WHMCS automation cron schedule. Exact next run timing is not exposed by this module.',
+    ];
+}
+
+/**
+ * @return array{type: string, text: string, success: bool}
+ */
+function porkbun_runCacheAdminAction(string $action, string $source = 'addon-page'): array
+{
+    $normalizedAction = strtolower(trim($action));
+
+    if ($normalizedAction === 'clear') {
+        $deleted = DomainCache::clearAll();
+
+        return [
+            'type' => 'success',
+            'text' => 'Cache cleared. Removed ' . $deleted . ' cached record(s).',
+            'success' => true,
+        ];
+    }
+
+    if ($normalizedAction === 'generate') {
+        $generated = porkbun_generateCacheFromStoredSettings($source);
+        $generatedRecords = (int) ($generated['domainsHydrated'] ?? 0);
+        $pagesFetched = (int) ($generated['pagesFetched'] ?? 0);
+
+        return [
+            'type' => (($generated['success'] ?? false) === true) ? 'success' : 'error',
+            'text' => (($generated['success'] ?? false) === true)
+                ? ('Cache generated successfully. Hydrated ' . $generatedRecords . ' cached record(s) across ' . max(1, $pagesFetched) . ' page(s).')
+                : (string) ($generated['details'] ?? 'Cache generation failed.'),
+            'success' => (($generated['success'] ?? false) === true),
+        ];
+    }
+
+    if ($normalizedAction === 'process-queue') {
+        $result = porkbun_runDomainCacheRefreshQueue([], $source);
+
+        return [
+            'type' => (($result['success'] ?? false) === true) ? 'success' : 'error',
+            'text' => (string) ($result['details'] ?? 'Queue processing failed.'),
+            'success' => (($result['success'] ?? false) === true),
+        ];
+    }
+
+    return [
+        'type' => 'error',
+        'text' => 'Unsupported cache admin action: ' . $action,
+        'success' => false,
+    ];
+}
+
+/**
+ * @param array<string, mixed>|null $message
+ */
+function porkbun_renderCacheAdminPanel(string $formAction = '', ?array $message = null, bool $includeProcessQueueButton = true): string
+{
+    $status = porkbun_getCacheAdminStatusData();
 
     $messageHtml = '';
-    if (isset($GLOBALS['porkbunCacheStatusMessage']) && is_array($GLOBALS['porkbunCacheStatusMessage'])) {
-        $message = $GLOBALS['porkbunCacheStatusMessage'];
+    if (is_array($message)) {
         $isError = (($message['type'] ?? '') === 'error');
         $color = $isError ? '#b91c1c' : '#166534';
         $messageText = htmlspecialchars((string) ($message['text'] ?? ''), ENT_QUOTES, 'UTF-8');
-        $messageHtml = '<div style="margin-top:6px;color:' . $color . ';">' . $messageText . '</div>';
+        $messageHtml = '<div style="margin-top:12px;padding:10px 12px;border-radius:4px;background:'
+            . ($isError ? '#fef2f2' : '#f0fdf4')
+            . ';color:' . $color . ';">' . $messageText . '</div>';
     }
 
     $token = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
@@ -565,36 +594,41 @@ function porkbun_renderCacheStatusField(): string
         $tokenField = '<input type="hidden" name="token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
     }
 
-    $formHtml = '';
-    if (defined('ADMINAREA') && constant('ADMINAREA') === true) {
-        $formHtml = '<form method="post" style="margin-top:8px;">'
+    $formActionAttribute = trim($formAction) !== ''
+        ? ' action="' . htmlspecialchars($formAction, ENT_QUOTES, 'UTF-8') . '"'
+        : '';
+    $processQueueButton = $includeProcessQueueButton
+        ? '<button type="submit" name="porkbunCacheAction" value="process-queue" class="btn btn-default btn-sm" style="margin-left:6px;">Process Queue</button>'
+        : '';
+
+    $formHtml = '<form method="post"' . $formActionAttribute . ' style="margin-top:12px;">'
             . $tokenField
             . '<button type="submit" name="porkbunCacheAction" value="generate" class="btn btn-default btn-sm">Generate Cache</button>'
             . '<button type="submit" name="porkbunCacheAction" value="clear" class="btn btn-default btn-sm" style="margin-left:6px;">Clear Cache</button>'
+            . $processQueueButton
             . '</form>';
-    }
 
-    return '<div>'
-        . '<div>Cached Domains: <strong>' . $totalDomains . '</strong></div>'
-        . '<div>Cached Records: <strong>' . $totalRecords . '</strong></div>'
-        . '<div>Last Cache Record Update: <strong>' . htmlspecialchars($lastUpdatedText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Full Cache Hydration: <strong>' . htmlspecialchars($lastHydrationText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Hydration Source: <strong>' . htmlspecialchars($lastHydrationSource, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Hydration Result: <strong>' . $lastHydratedRecords . ' record(s)</strong>'
-        . ($lastHydrationPages > 0 ? ' across <strong>' . $lastHydrationPages . ' page(s)</strong>' : '')
-        . ($lastHydrationDetails !== '' ? ' <span style="color:#6b7280;">' . htmlspecialchars($lastHydrationDetails, ENT_QUOTES, 'UTF-8') . '</span>' : '')
+    return '<div class="panel panel-default"><div class="panel-body">'
+        . '<div style="margin-bottom:8px;"><strong>Cached Domains:</strong> ' . (int) ($status['totalDomains'] ?? 0) . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Cached Records:</strong> ' . (int) ($status['totalRecords'] ?? 0) . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Cache Record Update:</strong> ' . htmlspecialchars((string) ($status['lastUpdatedText'] ?? 'Never'), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Full Cache Hydration:</strong> ' . htmlspecialchars((string) ($status['lastHydrationText'] ?? 'Never'), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Hydration Source:</strong> ' . htmlspecialchars((string) ($status['lastHydrationSource'] ?? 'Unknown'), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Hydration Result:</strong> ' . (int) ($status['lastHydratedRecords'] ?? 0) . ' record(s)'
+        . ((int) ($status['lastHydrationPages'] ?? 0) > 0 ? ' across ' . (int) ($status['lastHydrationPages'] ?? 0) . ' page(s)' : '')
+        . (((string) ($status['lastHydrationDetails'] ?? '')) !== '' ? ' <span style="color:#6b7280;">' . htmlspecialchars((string) ($status['lastHydrationDetails'] ?? ''), ENT_QUOTES, 'UTF-8') . '</span>' : '')
         . '</div>'
-        . '<div>Refresh Queue: <strong>' . (int) ($queueStats['pending'] ?? 0) . ' pending</strong>, <strong>' . (int) ($queueStats['processing'] ?? 0) . ' processing</strong>, <strong>' . (int) ($queueStats['failed'] ?? 0) . ' failed</strong></div>'
-        . '<div>Automatic Queue Processing: <strong>' . htmlspecialchars($automaticProcessingText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Queue Run: <strong>' . htmlspecialchars($lastQueueRunText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Queue Source: <strong>' . htmlspecialchars($lastQueueSource, ENT_QUOTES, 'UTF-8') . '</strong></div>'
-        . '<div>Last Queue Result: <strong>' . $lastQueueProcessed . ' processed</strong>, <strong>' . $lastQueueFailed . ' failed</strong>'
-        . ($lastQueueDetails !== '' ? ' <span style="color:#6b7280;">' . htmlspecialchars($lastQueueDetails, ENT_QUOTES, 'UTF-8') . '</span>' : '')
+        . '<div style="margin-bottom:8px;"><strong>Refresh Queue:</strong> ' . (int) ($status['queuePending'] ?? 0) . ' pending, ' . (int) ($status['queueProcessing'] ?? 0) . ' processing, ' . (int) ($status['queueFailed'] ?? 0) . ' failed</div>'
+        . '<div style="margin-bottom:8px;"><strong>Automatic Queue Processing:</strong> ' . htmlspecialchars((string) ($status['automaticProcessingText'] ?? ''), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Queue Run:</strong> ' . htmlspecialchars((string) ($status['lastQueueRunText'] ?? 'Never'), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Queue Source:</strong> ' . htmlspecialchars((string) ($status['lastQueueSource'] ?? 'Unknown'), ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="margin-bottom:8px;"><strong>Last Queue Result:</strong> ' . (int) ($status['lastQueueProcessed'] ?? 0) . ' processed, ' . (int) ($status['lastQueueFailed'] ?? 0) . ' failed'
+        . (((string) ($status['lastQueueDetails'] ?? '')) !== '' ? ' <span style="color:#6b7280;">' . htmlspecialchars((string) ($status['lastQueueDetails'] ?? ''), ENT_QUOTES, 'UTF-8') . '</span>' : '')
         . '</div>'
-        . '<div>Next Queue Run: <strong>' . htmlspecialchars($nextRunText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
+        . '<div style="margin-bottom:8px;"><strong>Next Queue Run:</strong> ' . htmlspecialchars((string) ($status['nextRunText'] ?? ''), ENT_QUOTES, 'UTF-8') . '</div>'
         . $formHtml
         . $messageHtml
-        . '</div>';
+        . '</div></div>';
 }
 
 /**
@@ -604,8 +638,6 @@ function porkbun_renderCacheStatusField(): string
  */
 function porkbun_getConfigArray(): array
 {
-    porkbun_handleCacheSettingsAction();
-
     return [
         'FriendlyName' => [
             'Type' => 'System',
@@ -643,11 +675,6 @@ function porkbun_getConfigArray(): array
             'Size' => '6',
             'Default' => '300',
             'Description' => 'Minimum seconds between repeated refresh queue requests for the same cache type.',
-        ],
-        'lockCacheStatus' => [
-            'FriendlyName' => 'Domain Cache Status',
-            'Type' => 'System',
-            'Value' => porkbun_renderCacheStatusField(),
         ],
         'debugLogging' => [
             'FriendlyName' => 'Enable Debug Logging',

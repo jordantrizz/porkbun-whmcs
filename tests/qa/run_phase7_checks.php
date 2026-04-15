@@ -6,6 +6,7 @@ define('WHMCS', true);
 define('ADMINAREA', true);
 require_once __DIR__ . '/../../porkbun.php';
 require_once __DIR__ . '/../../src/ApiClient.php';
+require_once __DIR__ . '/../../modules/addons/porkbun_cache_admin/porkbun_cache_admin.php';
 
 use PorkbunWhmcs\Registrar\ApiClient;
 
@@ -92,21 +93,45 @@ if (function_exists('porkbun_TestConnection')) {
 
 if (function_exists('porkbun_getConfigArray')) {
     $config = porkbun_getConfigArray();
-    $statusField = isset($config['lockCacheStatus']['Value']) ? (string) $config['lockCacheStatus']['Value'] : '';
-    $hasCachePanel = assertContains('Cached Domains', $statusField)
-        && assertContains('Generate Cache', $statusField)
-        && assertContains('Clear Cache', $statusField)
-        && assertContains('Automatic Queue Processing', $statusField);
+    $hasStatusField = array_key_exists('lockCacheStatus', $config);
+    $hasRegistrarSettings = isset($config['apiKey'], $config['secretApiKey'], $config['lockCacheTtl'], $config['cacheRefreshCooldown']);
+    $ok = !$hasStatusField && $hasRegistrarSettings;
 
-    if (!$hasCachePanel) {
+    if (!$ok) {
         $failures++;
     }
 
     addResult(
         $results,
-        'porkbun_getConfigArray cache status panel',
-        $hasCachePanel,
-        $hasCachePanel ? 'Rendered cache status field with admin controls.' : ('Unexpected cache status output: ' . $statusField)
+        'porkbun_getConfigArray supported fields only',
+        $ok,
+        $ok ? 'Registrar config exposes supported settings fields without the unsupported status panel.' : ('Unexpected config array: ' . json_encode(array_keys($config)))
+    );
+}
+
+if (function_exists('porkbun_cache_admin_output')) {
+    $_SESSION['token'] = 'phase7-token';
+    ob_start();
+    porkbun_cache_admin_output([
+        'modulelink' => 'addonmodules.php?module=porkbun_cache_admin',
+        'version' => defined('PORKBUN_MODULE_VERSION') ? PORKBUN_MODULE_VERSION : '0.1.0',
+    ]);
+    $output = (string) ob_get_clean();
+    $hasAdminPage = assertContains('Porkbun Cache Admin', $output)
+        && assertContains('Generate Cache', $output)
+        && assertContains('Clear Cache', $output)
+        && assertContains('Process Queue', $output)
+        && assertContains('Automatic Queue Processing', $output);
+
+    if (!$hasAdminPage) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'porkbun_cache_admin_output page rendering',
+        $hasAdminPage,
+        $hasAdminPage ? 'Rendered addon admin page with cache controls.' : ('Unexpected addon output: ' . $output)
     );
 }
 

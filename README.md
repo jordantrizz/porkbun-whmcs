@@ -31,6 +31,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 | Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping with cache write-through |
 | Get DNS | porkbun_GetDNS | Not supported | Returns explicit limitation error |
 | Save DNS | porkbun_SaveDNS | Not supported | Returns explicit limitation error |
+| Cache Admin Page | porkbun_cache_admin_output | Supported | Companion addon module admin page for cache status and controls |
 
 ## Installation
 
@@ -49,6 +50,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 7. Configure timeout, domain cache TTL, refresh cooldown, and debug logging as needed.
 8. Run Test Connection.
 9. Validate register, transfer, renew, and sync in a test environment.
+10. Activate the companion addon module `Porkbun Cache Admin` from WHMCS Addon Modules if you want cache status and manual cache controls in the admin area.
 
 ### Upgrade
 
@@ -84,12 +86,14 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
 - Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
 
-## Cache Admin Panel
+## Cache Admin Page
 
-- The Porkbun registrar config page includes a `Domain Cache Status` panel.
-- The panel shows cached domain count, cached record count, last cache row update, last full cache hydration, queue counts by status, and the last observed queue processor run.
+- Cache status and manual cache controls are exposed through the companion addon module `Porkbun Cache Admin`.
+- In WHMCS admin, activate the addon from Setup > Addon Modules, then open it from the Addons menu.
+- The page shows cached domain count, cached record count, last cache row update, last full cache hydration, queue counts by status, and the last observed queue processor run.
 - `Generate Cache` performs an immediate `/domain/listAll` hydration using the stored registrar credentials and updates the shared cache in place.
 - `Clear Cache` removes cached rows but does not change the WHMCS automation cron schedule.
+- `Process Queue` runs queued refresh jobs immediately from the admin page.
 - `Automatic Queue Processing` confirms that the module hook is registered and explains that execution depends on the WHMCS automation cron.
 - `Next Queue Run` is displayed as a WHMCS-controlled schedule notice rather than a guessed timestamp; exact timing depends on the WHMCS automation cron configuration for the installation.
 

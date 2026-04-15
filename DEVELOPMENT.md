@@ -16,6 +16,7 @@ Technical implementation notes and development workflow for the WHMCS Porkbun re
 - [src/Mapper.php](src/Mapper.php)
 - [src/Errors.php](src/Errors.php)
 - [src/Operations](src/Operations)
+- [modules/addons/porkbun_cache_admin/porkbun_cache_admin.php](modules/addons/porkbun_cache_admin/porkbun_cache_admin.php)
 - [tests](tests)
 
 ## WHMCS Function Surface
@@ -112,12 +113,11 @@ Guidance:
 7. If WHMCS exposes encrypted password values at rest, the resolver attempts `decrypt()` when available for `secretApiKey`.
 8. Successful shared hydrations record module-owned runtime state so the settings page can show the last full cache hydration and the last observed queue processor run.
 
-### Settings Page Cache Controls
+### Addon Admin Page Cache Controls
 
-- Implemented in [porkbun.php](porkbun.php) via:
-	- `porkbun_renderCacheStatusField()`
-	- `porkbun_handleCacheSettingsAction()`
-- `Domain Cache Status` field displays:
+- Implemented through the companion addon module entry point in [modules/addons/porkbun_cache_admin/porkbun_cache_admin.php](modules/addons/porkbun_cache_admin/porkbun_cache_admin.php).
+- Shared cache-admin helpers remain in [porkbun.php](porkbun.php) so both the registrar module and addon module use the same cache and queue behavior.
+- The addon page displays:
 	- cached domain count
 	- cached record count
 	- last cache row update time (UTC)
@@ -125,20 +125,17 @@ Guidance:
 	- queue counts by status (pending, processing, failed)
 	- last queue processor run/source/result
 	- WHMCS-controlled next-run notice
-- Includes `Generate Cache` and `Clear Cache` buttons in admin settings context.
-- Clear action security:
+- The addon page exposes `Generate Cache`, `Clear Cache`, and `Process Queue` actions.
+- Admin-page action security:
 	- accepts POST only
-	- checks admin area context
 	- validates WHMCS session token (`token`)
-	- supports `generate` and `clear` actions
-- Clear action behavior:
-	- executes `DomainCache::clearAll()`
-	- displays inline success/error feedback in settings field HTML
+	- uses shared helpers for `generate`, `clear`, and `process-queue`
 - Generate action behavior:
 	- reads stored Porkbun registrar settings from `tblregistrars`
 	- runs `HydrateDomainCacheFromListAllOperation::execute()` synchronously
 	- records last hydration metadata in `mod_porkbun_module_state`
-	- displays inline success/error feedback in settings field HTML
+- Queue processing behavior:
+	- uses the same `porkbun_runDomainCacheRefreshQueue()` path as cron and registrar admin commands
 
 ### Operational Notes
 
