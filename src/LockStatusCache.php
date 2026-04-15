@@ -61,6 +61,50 @@ final class LockStatusCache
     }
 
     /**
+     * @return array{totalRecords: int, lastFetchedAt: int|null}
+     */
+    public static function getStats(): array
+    {
+        if (!self::isStorageAvailable() || !self::ensureTable()) {
+            return [
+                'totalRecords' => 0,
+                'lastFetchedAt' => null,
+            ];
+        }
+
+        try {
+            $capsule = self::capsuleClass();
+            $totalRecords = (int) $capsule::table(self::TABLE_NAME)->count();
+            $lastFetchedAt = $capsule::table(self::TABLE_NAME)->max('fetched_at');
+
+            return [
+                'totalRecords' => $totalRecords,
+                'lastFetchedAt' => is_numeric($lastFetchedAt) && (int) $lastFetchedAt > 0 ? (int) $lastFetchedAt : null,
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'totalRecords' => 0,
+                'lastFetchedAt' => null,
+            ];
+        }
+    }
+
+    public static function clearAll(): int
+    {
+        if (!self::isStorageAvailable() || !self::ensureTable()) {
+            return 0;
+        }
+
+        try {
+            $capsule = self::capsuleClass();
+
+            return (int) $capsule::table(self::TABLE_NAME)->delete();
+        } catch (\Throwable $exception) {
+            return 0;
+        }
+    }
+
+    /**
      * @param array<string, bool> $domainLocks
      */
     public static function putMany(string $accountHash, array $domainLocks, int $ttlSeconds, ?int $now = null): int

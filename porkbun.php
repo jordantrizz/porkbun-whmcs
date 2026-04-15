@@ -211,6 +211,83 @@ function porkbun_logModuleCall(array $params, string $action, array $request, ar
     );
 }
 
+function porkbun_handleCacheSettingsAction(): void
+{
+    $isAdminArea = defined('ADMINAREA') && constant('ADMINAREA') === true;
+    if (!$isAdminArea) {
+        return;
+    }
+
+    if (!isset($_SERVER['REQUEST_METHOD']) || strtoupper((string) $_SERVER['REQUEST_METHOD']) !== 'POST') {
+        return;
+    }
+
+    $action = isset($_POST['porkbunCacheAction']) ? trim((string) $_POST['porkbunCacheAction']) : '';
+    if ($action !== 'clear') {
+        return;
+    }
+
+    $providedToken = isset($_POST['token']) ? (string) $_POST['token'] : '';
+    $sessionToken = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
+    if ($providedToken === '' || $sessionToken === '' || !hash_equals($sessionToken, $providedToken)) {
+        $GLOBALS['porkbunCacheStatusMessage'] = [
+            'type' => 'error',
+            'text' => 'Cache clear request was rejected due to an invalid security token.',
+        ];
+
+        return;
+    }
+
+    $deleted = LockStatusCache::clearAll();
+    $GLOBALS['porkbunCacheStatusMessage'] = [
+        'type' => 'success',
+        'text' => 'Cache cleared. Removed ' . $deleted . ' cached record(s).',
+    ];
+}
+
+function porkbun_renderCacheStatusField(): string
+{
+    $stats = LockStatusCache::getStats();
+    $totalRecords = (int) ($stats['totalRecords'] ?? 0);
+    $lastFetchedAt = $stats['lastFetchedAt'] ?? null;
+    $lastUpdatedText = 'Never';
+
+    if (is_int($lastFetchedAt) && $lastFetchedAt > 0) {
+        $lastUpdatedText = gmdate('Y-m-d H:i:s', $lastFetchedAt) . ' UTC';
+    }
+
+    $messageHtml = '';
+    if (isset($GLOBALS['porkbunCacheStatusMessage']) && is_array($GLOBALS['porkbunCacheStatusMessage'])) {
+        $message = $GLOBALS['porkbunCacheStatusMessage'];
+        $isError = (($message['type'] ?? '') === 'error');
+        $color = $isError ? '#b91c1c' : '#166534';
+        $messageText = htmlspecialchars((string) ($message['text'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $messageHtml = '<div style="margin-top:6px;color:' . $color . ';">' . $messageText . '</div>';
+    }
+
+    $token = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
+    $tokenField = '';
+    if ($token !== '') {
+        $tokenField = '<input type="hidden" name="token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
+    }
+
+    $formHtml = '';
+    if (defined('ADMINAREA') && constant('ADMINAREA') === true) {
+        $formHtml = '<form method="post" style="margin-top:8px;">'
+            . $tokenField
+            . '<input type="hidden" name="porkbunCacheAction" value="clear">'
+            . '<button type="submit" class="btn btn-default btn-sm">Clear Cache</button>'
+            . '</form>';
+    }
+
+    return '<div>'
+        . '<div>Last Cache Refresh: <strong>' . htmlspecialchars($lastUpdatedText, ENT_QUOTES, 'UTF-8') . '</strong></div>'
+        . '<div>Cached Records: <strong>' . $totalRecords . '</strong></div>'
+        . $formHtml
+        . $messageHtml
+        . '</div>';
+}
+
 /**
  * WHMCS registrar module configuration.
  *
@@ -218,6 +295,8 @@ function porkbun_logModuleCall(array $params, string $action, array $request, ar
  */
 function porkbun_getConfigArray(): array
 {
+    porkbun_handleCacheSettingsAction();
+
     return [
         'FriendlyName' => [
             'Type' => 'System',
@@ -248,6 +327,11 @@ function porkbun_getConfigArray(): array
             'Size' => '6',
             'Default' => (string) LockStatusCache::defaultTtlSeconds(),
             'Description' => 'Lock cache freshness window in seconds (default 3600)',
+        ],
+        'lockCacheStatus' => [
+            'FriendlyName' => 'Lock Cache Status',
+            'Type' => 'System',
+            'Value' => porkbun_renderCacheStatusField(),
         ],
         'debugLogging' => [
             'FriendlyName' => 'Enable Debug Logging',
