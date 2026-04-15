@@ -11,6 +11,7 @@ This changelog is generated from git release history and commit history.
 - Archived TODO roadmap into docs/BUILD.md (commit: bf26908).
 - Streamlined README and moved development-heavy content to DEVELOPMENT.md (commit: 0b701df).
 - Added dedicated installation method section in README (commit: c6bc59c).
+- Added persistent registrar lock cache with `/domain/listAll` hydration and TTL configuration.
 
 ## [0.1.0] - 2026-04-14
 

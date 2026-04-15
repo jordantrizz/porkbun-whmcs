@@ -49,6 +49,11 @@ final class ApiClient
         return $this->timeout;
     }
 
+    public function getCredentialFingerprint(): string
+    {
+        return hash('sha256', $this->apiKey . '|' . $this->secretApiKey);
+    }
+
     /**
      * @param array<string, mixed> $payload
      * @return array{

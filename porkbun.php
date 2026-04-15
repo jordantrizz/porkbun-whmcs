@@ -10,6 +10,7 @@ if (!defined('PORKBUN_MODULE_VERSION')) {
 
 require_once __DIR__ . '/src/ApiClient.php';
 require_once __DIR__ . '/src/Errors.php';
+require_once __DIR__ . '/src/LockStatusCache.php';
 require_once __DIR__ . '/src/Mapper.php';
 require_once __DIR__ . '/src/Operations/RegisterDomainOperation.php';
 require_once __DIR__ . '/src/Operations/TransferDomainOperation.php';
@@ -24,6 +25,7 @@ require_once __DIR__ . '/src/Operations/GetRegistrarLockOperation.php';
 require_once __DIR__ . '/src/Operations/SaveRegistrarLockOperation.php';
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\LockStatusCache;
 use PorkbunWhmcs\Registrar\Mapper;
 use PorkbunWhmcs\Registrar\Operations\RegisterDomainOperation;
 use PorkbunWhmcs\Registrar\Operations\RenewDomainOperation;
@@ -77,6 +79,16 @@ function porkbun_getTimeout(array $params, int $default = 20): int
     }
 
     return $timeout;
+}
+
+/**
+ * @param array<string, mixed> $params
+ */
+function porkbun_getLockCacheTtl(array $params): int
+{
+    $ttl = isset($params['lockCacheTtl']) ? (int) $params['lockCacheTtl'] : LockStatusCache::defaultTtlSeconds();
+
+    return $ttl > 0 ? $ttl : LockStatusCache::defaultTtlSeconds();
 }
 
 /**
@@ -229,6 +241,13 @@ function porkbun_getConfigArray(): array
             'Size' => '5',
             'Default' => '20',
             'Description' => 'Request timeout in seconds',
+        ],
+        'lockCacheTtl' => [
+            'FriendlyName' => 'Lock Cache TTL',
+            'Type' => 'text',
+            'Size' => '6',
+            'Default' => (string) LockStatusCache::defaultTtlSeconds(),
+            'Description' => 'Lock cache freshness window in seconds (default 3600)',
         ],
         'debugLogging' => [
             'FriendlyName' => 'Enable Debug Logging',
@@ -760,14 +779,14 @@ function porkbun_GetRegistrarLock(array $params): array
         return ['error' => 'Configuration error: missing API credentials.'];
     }
 
-    $result = GetRegistrarLockOperation::execute($client, $domain);
+    $result = GetRegistrarLockOperation::execute($client, $domain, porkbun_getLockCacheTtl($params));
 
     porkbun_logModuleCall(
         $params,
         'GetRegistrarLock',
         is_array($result['request'] ?? null)
             ? $result['request']
-            : ['operation' => 'GetRegistrarLock', 'endpoint' => '/domain/getLock/' . $domain],
+            : ['operation' => 'GetRegistrarLock', 'endpoint' => '/domain/listAll'],
         [
             'success' => (bool) ($result['success'] ?? false),
             'details' => (string) ($result['details'] ?? ''),
@@ -805,7 +824,7 @@ function porkbun_SaveRegistrarLock(array $params): array
     $lockParam = strtolower(trim((string) ($params['lockenabled'] ?? $params['lockstatus'] ?? '')));
     $lockEnabled = in_array($lockParam, ['1', 'true', 'on', 'locked', 'yes'], true);
 
-    $result = SaveRegistrarLockOperation::execute($client, $domain, $lockEnabled);
+    $result = SaveRegistrarLockOperation::execute($client, $domain, $lockEnabled, porkbun_getLockCacheTtl($params));
 
     porkbun_logModuleCall(
         $params,

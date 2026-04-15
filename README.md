@@ -15,7 +15,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 
 | WHMCS Registrar Operation | Module Function | Status | Notes |
 | --- | --- | --- | --- |
-| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, debug logging |
+| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, lock cache TTL, debug logging |
 | Test Connection | porkbun_TestConnection | Supported | Uses Porkbun ping endpoint |
 | Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
 | Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
@@ -27,8 +27,8 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 | Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
 | Save Contact Details | porkbun_SaveContactDetails | Supported | Maps WHMCS contacts to API payload |
 | Get EPP Code | porkbun_GetEPPCode | Supported | TLD-dependent on registry support |
-| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Normalized lock-state handling |
-| Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping |
+| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup with listAll hydration |
+| Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping with cache write-through |
 | Get DNS | porkbun_GetDNS | Not supported | Returns explicit limitation error |
 | Save DNS | porkbun_SaveDNS | Not supported | Returns explicit limitation error |
 
@@ -46,7 +46,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - Configuration > System Settings > Domain Registrars
 5. Activate the Porkbun registrar module.
 6. Enter API Key and Secret API Key.
-7. Configure timeout and debug logging as needed.
+7. Configure timeout, lock cache TTL, and debug logging as needed.
 8. Run Test Connection.
 9. Validate register, transfer, renew, and sync in a test environment.
 
@@ -71,6 +71,14 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - EPP code availability is TLD and registry policy dependent.
 - Registrar lock behavior can vary by TLD policy.
 - Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
+
+## Lock Status Caching
+
+- Lock reads use a persistent WHMCS DB cache (`mod_porkbun_lock_cache`) keyed by domain and credential fingerprint.
+- Cache default TTL is 3600 seconds and can be changed with module setting `Lock Cache TTL`.
+- On cache miss or stale data, the module hydrates lock states via `/domain/listAll` and writes results back to cache.
+- Successful lock updates (`SaveRegistrarLock`) immediately update cache to reduce stale reads.
+- If listAll hydration fails, the module falls back to direct `/domain/getLock/{domain}` lookup.
 
 ## Admin Sync Button
 

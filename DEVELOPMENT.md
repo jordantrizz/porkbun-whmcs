@@ -47,6 +47,7 @@ Current config fields in module settings:
 - API Key
 - Secret API Key
 - Request Timeout
+- Lock Cache TTL
 - Enable Debug Logging
 
 Guidance:
@@ -68,6 +69,16 @@ Guidance:
 - Nameserver output mapped to WHMCS ns1..ns5 format.
 - Contact objects mapped between WHMCS contact shape and Porkbun payload fields.
 - Sync maps registry expiry information to WHMCS expirydate with regression guardrails.
+- Registrar lock reads are cache-first and hydrate via `/domain/listAll` when cache is stale/missing.
+
+## Lock Cache
+
+- Storage table: `mod_porkbun_lock_cache`
+- Key: (`account_hash`, `domain`)
+- Cached value: `lock_enabled` with `fetched_at` and `expires_at`
+- Default TTL: 3600 seconds (`Lock Cache TTL` setting overrides per module config)
+- Write-through updates occur after successful `SaveRegistrarLock`
+- Read fallback path: `/domain/getLock/{domain}` if listAll hydration fails
 
 ## Security Requirements
 

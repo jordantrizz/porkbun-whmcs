@@ -3,6 +3,7 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\LockStatusCache;
 
 final class SaveRegistrarLockOperation
 {
@@ -14,7 +15,7 @@ final class SaveRegistrarLockOperation
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain, bool $lockEnabled): array
+    public static function execute(ApiClient $client, string $domain, bool $lockEnabled, ?int $cacheTtlSeconds = null): array
     {
         $endpoint = '/domain/updateLock/' . $domain;
         $payload = [
@@ -41,12 +42,21 @@ final class SaveRegistrarLockOperation
             ];
         }
 
+        $ttl = $cacheTtlSeconds ?? LockStatusCache::defaultTtlSeconds();
+        LockStatusCache::put(
+            $client->getCredentialFingerprint(),
+            strtolower(trim($domain)),
+            $lockEnabled,
+            $ttl
+        );
+
         return [
             'success' => true,
             'context' => [
                 'request' => $response['context'] ?? [],
                 'status' => 'success',
                 'lockEnabled' => $lockEnabled,
+                'cacheUpdated' => true,
             ],
             'request' => [
                 'operation' => 'SaveRegistrarLock',
