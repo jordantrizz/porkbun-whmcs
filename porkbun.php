@@ -524,7 +524,7 @@ function porkbun_syncnow(array $params): array
 
 /**
  * @param array<string, mixed> $params
- * @return array{ns1?: string, ns2?: string, ns3?: string, ns4?: string, ns5?: string, error?: string}
+ * @return array{ns1?: string, ns2?: string, ns3?: string, ns4?: string, ns5?: string, warning?: string, error?: string}
  */
 function porkbun_GetNameservers(array $params): array
 {
@@ -554,6 +554,15 @@ function porkbun_GetNameservers(array $params): array
     );
 
     if (($result['success'] ?? false) !== true) {
+        $warningCode = strtoupper(trim((string) ($result['warningCode'] ?? '')));
+        if ($warningCode === 'DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS') {
+            $fallbackNameservers = porkbun_extractNameserversFromParams($params);
+            $response = porkbun_mapNameserversToWhmcs($fallbackNameservers);
+            $response['warning'] = (string) ($result['warning'] ?? 'Nameserver sync warning: domain is not opted in to API access at Porkbun.');
+
+            return $response;
+        }
+
         return [
             'error' => 'Operation failed: GetNameservers for ' . $domain . '. Reason: ' . ($result['details'] ?? 'Unknown error.'),
         ];

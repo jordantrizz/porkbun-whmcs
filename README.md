@@ -67,6 +67,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 ## Known Limitations
 
 - DNS operations are currently returned as explicitly unsupported.
+- If Porkbun returns `DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS` for nameserver reads, the module returns a warning and uses existing WHMCS nameserver values instead of hard failing domain access.
 - EPP code availability is TLD and registry policy dependent.
 - Registrar lock behavior can vary by TLD policy.
 - Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
