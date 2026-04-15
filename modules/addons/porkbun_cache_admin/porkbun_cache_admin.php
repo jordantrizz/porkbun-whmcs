@@ -62,6 +62,7 @@ function porkbun_cache_admin_deactivate(): array
 function porkbun_cache_admin_output(array $vars): void
 {
     $message = null;
+    $pageToken = isset($vars['token']) ? (string) $vars['token'] : '';
 
     if (
         isset($_SERVER['REQUEST_METHOD'])
@@ -70,7 +71,7 @@ function porkbun_cache_admin_output(array $vars): void
         $action = isset($_POST['porkbunCacheAction']) ? trim((string) $_POST['porkbunCacheAction']) : '';
         if (in_array($action, ['generate', 'clear', 'process-queue'], true)) {
             $providedToken = isset($_POST['token']) ? (string) $_POST['token'] : '';
-            if (!porkbun_isValidAdminSecurityToken($providedToken)) {
+            if (!porkbun_isValidAdminSecurityToken($providedToken, $pageToken)) {
                 $message = [
                     'type' => 'error',
                     'text' => 'Cache admin request was rejected due to an invalid security token.',
@@ -88,6 +89,6 @@ function porkbun_cache_admin_output(array $vars): void
     echo '<h2>Porkbun Cache Admin</h2>';
     echo '<p style="margin-bottom:16px;color:#4b5563;">Manage shared cache hydration, refresh queue processing, and runtime status for the Porkbun registrar module.</p>';
     echo '<p style="margin-bottom:16px;color:#6b7280;"><strong>Module Version:</strong> ' . htmlspecialchars($moduleVersion, ENT_QUOTES, 'UTF-8') . '</p>';
-    echo porkbun_renderCacheAdminPanel($moduleLink, $message, true);
+    echo porkbun_renderCacheAdminPanel($moduleLink, $message, true, $pageToken);
     echo '</div>';
 }

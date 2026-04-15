@@ -110,18 +110,21 @@ if (function_exists('porkbun_getConfigArray')) {
 }
 
 if (function_exists('porkbun_cache_admin_output')) {
-    $_SESSION['token'] = 'phase7-token';
+    $_SESSION['token'] = 'phase7-session-token';
     ob_start();
     porkbun_cache_admin_output([
         'modulelink' => 'addonmodules.php?module=porkbun_cache_admin',
         'version' => defined('PORKBUN_MODULE_VERSION') ? PORKBUN_MODULE_VERSION : '0.1.0',
+        'token' => 'phase7-page-token',
     ]);
     $output = (string) ob_get_clean();
     $hasAdminPage = assertContains('Porkbun Cache Admin', $output)
         && assertContains('Generate Cache', $output)
         && assertContains('Clear Cache', $output)
         && assertContains('Process Queue', $output)
-        && assertContains('Automatic Queue Processing', $output);
+        && assertContains('Automatic Queue Processing', $output)
+        && assertContains('phase7-page-token', $output)
+        && !assertContains('phase7-session-token', $output);
 
     if (!$hasAdminPage) {
         $failures++;

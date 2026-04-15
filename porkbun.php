@@ -476,12 +476,19 @@ function porkbun_generateCacheFromStoredSettings(string $source = 'settings-gene
     ];
 }
 
-function porkbun_isValidAdminSecurityToken(string $providedToken): bool
+function porkbun_isValidAdminSecurityToken(string $providedToken, ?string $expectedToken = null): bool
 {
     $sessionToken = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
 
-    return $providedToken !== ''
-        && $sessionToken !== ''
+    if ($providedToken === '') {
+        return false;
+    }
+
+    if (is_string($expectedToken) && $expectedToken !== '' && hash_equals($expectedToken, $providedToken)) {
+        return true;
+    }
+
+    return $sessionToken !== ''
         && hash_equals($sessionToken, $providedToken);
 }
 
@@ -574,7 +581,12 @@ function porkbun_runCacheAdminAction(string $action, string $source = 'addon-pag
 /**
  * @param array<string, mixed>|null $message
  */
-function porkbun_renderCacheAdminPanel(string $formAction = '', ?array $message = null, bool $includeProcessQueueButton = true): string
+function porkbun_renderCacheAdminPanel(
+    string $formAction = '',
+    ?array $message = null,
+    bool $includeProcessQueueButton = true,
+    ?string $tokenValue = null
+): string
 {
     $status = porkbun_getCacheAdminStatusData();
 
@@ -588,7 +600,9 @@ function porkbun_renderCacheAdminPanel(string $formAction = '', ?array $message 
             . ';color:' . $color . ';">' . $messageText . '</div>';
     }
 
-    $token = isset($_SESSION['token']) ? (string) $_SESSION['token'] : '';
+    $token = is_string($tokenValue) && $tokenValue !== ''
+        ? $tokenValue
+        : (isset($_SESSION['token']) ? (string) $_SESSION['token'] : '');
     $tokenField = '';
     if ($token !== '') {
         $tokenField = '<input type="hidden" name="token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
