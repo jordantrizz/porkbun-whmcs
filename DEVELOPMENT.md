@@ -48,6 +48,7 @@ Current config fields in module settings:
 - Secret API Key
 - Request Timeout
 - Lock Cache TTL
+- Lock Cache Status
 - Enable Debug Logging
 
 Guidance:
@@ -73,12 +74,60 @@ Guidance:
 
 ## Lock Cache
 
-- Storage table: `mod_porkbun_lock_cache`
+- Storage class: [src/LockStatusCache.php](src/LockStatusCache.php)
+- Storage table: `mod_porkbun_lock_cache` (auto-created on first use)
 - Key: (`account_hash`, `domain`)
-- Cached value: `lock_enabled` with `fetched_at` and `expires_at`
-- Default TTL: 3600 seconds (`Lock Cache TTL` setting overrides per module config)
-- Write-through updates occur after successful `SaveRegistrarLock`
-- Read fallback path: `/domain/getLock/{domain}` if listAll hydration fails
+- Account partitioning: `account_hash` is a SHA-256 fingerprint of API key + secret from `ApiClient::getCredentialFingerprint()`.
+- Cached columns:
+	- `lock_enabled` (`0|1`)
+	- `fetched_at` (unix timestamp)
+	- `expires_at` (unix timestamp)
+	- `created_at`, `updated_at`
+- Indexes:
+	- unique index on (`account_hash`, `domain`)
+	- non-unique index on `expires_at`
+- Default TTL: 3600 seconds (`Lock Cache TTL` setting overrides per module config; minimum effective TTL is 60 seconds in cache writer)
+- Expired-row cleanup: opportunistic cleanup runs during writes (approx. 1% of writes), deleting entries older than one day past `expires_at`.
+
+### Lock Read Flow
+
+1. `porkbun_GetRegistrarLock` passes configured TTL into `GetRegistrarLockOperation::execute`.
+2. Operation checks `LockStatusCache::getFresh(account_hash, domain)` first.
+3. On cache miss/stale:
+	 - call `/domain/listAll` with pagination (`start` increments by 1000)
+	 - extract domain + lock status candidates from returned structures
+	 - bulk upsert rows via `LockStatusCache::putMany`
+4. Re-check cache for requested domain.
+5. If still unresolved or listAll fails, fallback to direct `/domain/getLock/{domain}`.
+6. Successful direct fallback is written back with `LockStatusCache::put`.
+
+### Lock Write Flow
+
+1. `porkbun_SaveRegistrarLock` passes configured TTL into `SaveRegistrarLockOperation::execute`.
+2. After successful `/domain/updateLock/{domain}`, operation performs write-through cache update for the same domain.
+
+### Settings Page Cache Controls
+
+- Implemented in [porkbun.php](porkbun.php) via:
+	- `porkbun_renderCacheStatusField()`
+	- `porkbun_handleCacheSettingsAction()`
+- `Lock Cache Status` field displays:
+	- last cache refresh time (UTC)
+	- cached record count
+- Includes `Clear Cache` button in admin settings context.
+- Clear action security:
+	- accepts POST only
+	- checks admin area context
+	- validates WHMCS session token (`token`)
+- Clear action behavior:
+	- executes `LockStatusCache::clearAll()`
+	- displays inline success/error feedback in settings field HTML
+
+### Operational Notes
+
+- If WHMCS DB/Capsule is unavailable, cache methods fail safely and lock operations continue via API path.
+- `GetRegistrarLock` may use endpoint `/domain/listAll` in logs even when serving a cache hit, because listAll is the primary cache hydration source.
+- The cache table stores no raw credentials or secrets.
 
 ## Security Requirements
 
