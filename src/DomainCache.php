@@ -169,13 +169,14 @@ final class DomainCache
     }
 
     /**
-     * @return array{totalRecords: int, lastFetchedAt: int|null}
+     * @return array{totalRecords: int, totalDomains: int, lastFetchedAt: int|null}
      */
     public static function getStats(): array
     {
         if (!self::isStorageAvailable() || !self::ensureTable()) {
             return [
                 'totalRecords' => 0,
+                'totalDomains' => 0,
                 'lastFetchedAt' => null,
             ];
         }
@@ -183,15 +184,20 @@ final class DomainCache
         try {
             $capsule = self::capsuleClass();
             $totalRecords = (int) $capsule::table(self::TABLE_NAME)->count();
+            $totalDomains = (int) $capsule::table(self::TABLE_NAME)
+                ->distinct()
+                ->count('domain');
             $lastFetchedAt = $capsule::table(self::TABLE_NAME)->max('fetched_at');
 
             return [
                 'totalRecords' => $totalRecords,
+                'totalDomains' => $totalDomains,
                 'lastFetchedAt' => is_numeric($lastFetchedAt) && (int) $lastFetchedAt > 0 ? (int) $lastFetchedAt : null,
             ];
         } catch (\Throwable $exception) {
             return [
                 'totalRecords' => 0,
+                'totalDomains' => 0,
                 'lastFetchedAt' => null,
             ];
         }

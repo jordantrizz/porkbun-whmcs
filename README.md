@@ -75,7 +75,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 ## Domain Cache
 
 - Domain reads use a persistent WHMCS DB cache (`mod_porkbun_domain_cache`) keyed by account fingerprint, domain, and data type.
-- Current cached data types: `lock`, `nameservers`.
+- Current cached data types: `lock`, `nameservers`, `sync`.
 - Cache default TTL is 3600 seconds and can be changed with module setting `Domain Cache TTL`.
 - Stale-while-revalidate behavior:
 	- stale entries are returned immediately for non-blocking reads
@@ -83,6 +83,15 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 	- queue processing hydrates from `/domain/listAll` and writes back to cache
 - Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
 - Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
+
+## Cache Admin Panel
+
+- The Porkbun registrar config page includes a `Domain Cache Status` panel.
+- The panel shows cached domain count, cached record count, last cache row update, last full cache hydration, queue counts by status, and the last observed queue processor run.
+- `Generate Cache` performs an immediate `/domain/listAll` hydration using the stored registrar credentials and updates the shared cache in place.
+- `Clear Cache` removes cached rows but does not change the WHMCS automation cron schedule.
+- `Automatic Queue Processing` confirms that the module hook is registered and explains that execution depends on the WHMCS automation cron.
+- `Next Queue Run` is displayed as a WHMCS-controlled schedule notice rather than a guessed timestamp; exact timing depends on the WHMCS automation cron configuration for the installation.
 
 ## Admin Sync Button
 

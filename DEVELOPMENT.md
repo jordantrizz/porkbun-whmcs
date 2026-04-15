@@ -80,10 +80,12 @@ Guidance:
 - Key: (`account_hash`, `domain`, `data_type`)
 - Queue class: [src/DomainRefreshQueue.php](src/DomainRefreshQueue.php)
 - Queue table: `mod_porkbun_domain_refresh_queue`
+- Module state table: `mod_porkbun_module_state`
 - Account partitioning: `account_hash` is a SHA-256 fingerprint of API key + secret from `ApiClient::getCredentialFingerprint()`.
 - Cached data types in current implementation:
 	- `lock` (bool)
 	- `nameservers` (array<string>)
+	- `sync` (array<string, mixed>)
 - Freshness columns:
 	- `fetched_at` (unix timestamp)
 	- `stale_at` (unix timestamp)
@@ -108,6 +110,7 @@ Guidance:
 5. Automatic processing is registered through WHMCS native `DailyCronJob` hook in [porkbun.php](porkbun.php).
 6. Cron credential resolution reads the module's configured settings from `tblregistrars` and matches queued jobs by `ApiClient::getCredentialFingerprint()`.
 7. If WHMCS exposes encrypted password values at rest, the resolver attempts `decrypt()` when available for `secretApiKey`.
+8. Successful shared hydrations record module-owned runtime state so the settings page can show the last full cache hydration and the last observed queue processor run.
 
 ### Settings Page Cache Controls
 
@@ -115,16 +118,26 @@ Guidance:
 	- `porkbun_renderCacheStatusField()`
 	- `porkbun_handleCacheSettingsAction()`
 - `Domain Cache Status` field displays:
-	- last cache refresh time (UTC)
+	- cached domain count
 	- cached record count
-	- queued refresh job count
-- Includes `Clear Cache` button in admin settings context.
+	- last cache row update time (UTC)
+	- last full cache hydration time/source/result
+	- queue counts by status (pending, processing, failed)
+	- last queue processor run/source/result
+	- WHMCS-controlled next-run notice
+- Includes `Generate Cache` and `Clear Cache` buttons in admin settings context.
 - Clear action security:
 	- accepts POST only
 	- checks admin area context
 	- validates WHMCS session token (`token`)
+	- supports `generate` and `clear` actions
 - Clear action behavior:
 	- executes `DomainCache::clearAll()`
+	- displays inline success/error feedback in settings field HTML
+- Generate action behavior:
+	- reads stored Porkbun registrar settings from `tblregistrars`
+	- runs `HydrateDomainCacheFromListAllOperation::execute()` synchronously
+	- records last hydration metadata in `mod_porkbun_module_state`
 	- displays inline success/error feedback in settings field HTML
 
 ### Operational Notes

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 define('WHMCS', true);
+define('ADMINAREA', true);
 require_once __DIR__ . '/../../porkbun.php';
 require_once __DIR__ . '/../../src/ApiClient.php';
 
@@ -86,6 +87,26 @@ if (function_exists('porkbun_TestConnection')) {
         'porkbun_TestConnection missing API key handling',
         $ok,
         $ok ? 'Returned expected missing API key error.' : ('Unexpected response: ' . json_encode($testConnectionResponse))
+    );
+}
+
+if (function_exists('porkbun_getConfigArray')) {
+    $config = porkbun_getConfigArray();
+    $statusField = isset($config['lockCacheStatus']['Value']) ? (string) $config['lockCacheStatus']['Value'] : '';
+    $hasCachePanel = assertContains('Cached Domains', $statusField)
+        && assertContains('Generate Cache', $statusField)
+        && assertContains('Clear Cache', $statusField)
+        && assertContains('Automatic Queue Processing', $statusField);
+
+    if (!$hasCachePanel) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'porkbun_getConfigArray cache status panel',
+        $hasCachePanel,
+        $hasCachePanel ? 'Rendered cache status field with admin controls.' : ('Unexpected cache status output: ' . $statusField)
     );
 }
 

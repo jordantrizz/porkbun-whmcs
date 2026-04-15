@@ -43,6 +43,9 @@ This document tracks only the exit criteria that require live WHMCS and registra
 
 - [ ] Critical regression suite passes.
 - [ ] No sensitive values observed in logs.
+- [ ] Registrar config cache panel shows current cache and queue status without PHP warnings.
+- [ ] Generate Cache and Clear Cache actions behave correctly with valid and invalid credentials.
+- [ ] Last observed queue run metadata updates after manual queue processing and WHMCS daily cron execution.
 - [ ] Evidence captured for each regression scenario and log redaction check.
 
 ## Phase 8 Exit Criteria (Release Validation)
