@@ -18,8 +18,9 @@ final class SyncDomainOperation
      *   previousExpiryDate?: string,
      *   guardrail?: string,
      *   active?: bool,
-     *   expired?: bool,
+     *   cancelled?: bool,
      *   transferredAway?: bool,
+     *   status?: string,
      *   context?: array<string, mixed>,
      *   request?: array<string, mixed>
      * }
@@ -117,8 +118,8 @@ final class SyncDomainOperation
 
         $status = self::extractStatus($cached);
         $transferredAway = self::isTransferredAway($status);
-        $active = !$transferredAway;
-        $expired = self::isExpired($syncedDate);
+        $cancelled = self::isCancelled($status);
+        $active = !$transferredAway && !$cancelled;
 
         return [
             'success' => true,
@@ -127,8 +128,9 @@ final class SyncDomainOperation
             'previousExpiryDate' => $normalizedPreviousDate,
             'guardrail' => $guardrail,
             'active' => $active,
-            'expired' => $expired,
+            'cancelled' => $cancelled,
             'transferredAway' => $transferredAway,
+            'status' => $status,
             'context' => [
                 'request' => [
                     'operation' => 'SyncDomain',
@@ -234,17 +236,17 @@ final class SyncDomainOperation
         }
 
         return str_contains($status, 'transfer')
-            || str_contains($status, 'away')
-            || str_contains($status, 'inactive')
-            || str_contains($status, 'cancel');
+            || str_contains($status, 'away');
     }
 
-    private static function isExpired(string $expiryDate): bool
+    private static function isCancelled(string $status): bool
     {
-        $expiry = new DateTimeImmutable($expiryDate . ' 23:59:59');
-        $now = new DateTimeImmutable('now');
+        if ($status === '') {
+            return false;
+        }
 
-        return $expiry < $now;
+        return str_contains($status, 'cancel')
+            || str_contains($status, 'inactive');
     }
 
     private static function isDestructiveRegression(string $previousDate, string $newDate): bool

@@ -190,10 +190,12 @@ final class HydrateDomainCacheFromListAllOperation
     private static function extractLockState(array $data): ?bool
     {
         $candidates = [
+            $data['securityLock'] ?? null,
             $data['locked'] ?? null,
             $data['lock'] ?? null,
             $data['isLocked'] ?? null,
             $data['registrarLock'] ?? null,
+            $data['domain']['securityLock'] ?? null,
             $data['domain']['locked'] ?? null,
             $data['domain']['lock'] ?? null,
             $data['domain']['isLocked'] ?? null,

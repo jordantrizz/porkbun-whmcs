@@ -8,7 +8,7 @@ final class DomainRefreshQueue
     private const DEFAULT_COOLDOWN_SECONDS = 300;
     private const DEFAULT_LEASE_SECONDS = 120;
 
-    public static function enqueue(string $accountHash, string $dataType, ?int $cooldownSeconds = null, ?int $now = null): bool
+    public static function enqueue(string $accountHash, string $dataType, ?int $cooldownSeconds = null, ?int $now = null, ?string $domain = null): bool
     {
         if (!self::isStorageAvailable() || !self::ensureTable()) {
             return false;
@@ -17,6 +17,7 @@ final class DomainRefreshQueue
         $currentTime = $now ?? time();
         $cooldown = max(5, (int) ($cooldownSeconds ?? self::DEFAULT_COOLDOWN_SECONDS));
         $normalizedType = self::normalizeDataType($dataType);
+        $normalizedDomain = strtolower(trim((string) $domain));
 
         try {
             $capsule = self::capsuleClass();
@@ -24,12 +25,14 @@ final class DomainRefreshQueue
             $existing = $capsule::table(self::TABLE_NAME)
                 ->where('account_hash', $accountHash)
                 ->where('data_type', $normalizedType)
+                ->where('domain', $normalizedDomain)
                 ->first();
 
             if (!is_object($existing)) {
                 $capsule::table(self::TABLE_NAME)->insert([
                     'account_hash' => $accountHash,
                     'data_type' => $normalizedType,
+                    'domain' => $normalizedDomain,
                     'status' => 'pending',
                     'attempts' => 0,
                     'available_at' => $currentTime,
@@ -65,7 +68,7 @@ final class DomainRefreshQueue
     }
 
     /**
-     * @return array<int, array{id: int, accountHash: string, dataType: string, attempts: int}>
+     * @return array<int, array{id: int, accountHash: string, dataType: string, domain: string, attempts: int}>
      */
     public static function claimBatch(int $limit = 10, ?int $leaseSeconds = null, ?int $now = null): array
     {
@@ -110,6 +113,7 @@ final class DomainRefreshQueue
                     'id' => (int) $row->id,
                     'accountHash' => (string) ($row->account_hash ?? ''),
                     'dataType' => (string) ($row->data_type ?? ''),
+                    'domain' => (string) ($row->domain ?? ''),
                     'attempts' => (int) ($row->attempts ?? 0),
                 ];
             }
@@ -213,6 +217,7 @@ final class DomainRefreshQueue
                     $table->increments('id');
                     $table->string('account_hash', 64);
                     $table->string('data_type', 64);
+                    $table->string('domain', 255)->default('');
                     $table->string('status', 16)->default('pending');
                     $table->unsignedInteger('attempts')->default(0);
                     $table->unsignedInteger('available_at')->default(0);
@@ -221,9 +226,11 @@ final class DomainRefreshQueue
                     $table->text('last_error');
                     $table->dateTime('created_at');
                     $table->dateTime('updated_at');
-                    $table->unique(['account_hash', 'data_type'], 'pb_domain_refresh_account_type_unique');
+                    $table->unique(['account_hash', 'data_type', 'domain'], 'pb_domain_refresh_account_type_domain_unique');
                     $table->index(['status', 'available_at'], 'pb_domain_refresh_status_available_idx');
                 });
+            } else {
+                self::migrateDomainColumn($schema);
             }
         } catch (\Throwable $exception) {
             return false;
@@ -232,6 +239,41 @@ final class DomainRefreshQueue
         $tableReady = true;
 
         return true;
+    }
+
+    /**
+     * Adds the per-domain queue column and replaces the legacy account/type unique index.
+     *
+     * @param mixed $schema
+     */
+    private static function migrateDomainColumn($schema): void
+    {
+        $columns = $schema->getColumnListing(self::TABLE_NAME);
+        if (!in_array('domain', $columns, true)) {
+            try {
+                $schema->table(self::TABLE_NAME, function ($table): void {
+                    $table->string('domain', 255)->default('');
+                });
+            } catch (\Throwable $exception) {
+                return;
+            }
+        }
+
+        try {
+            $schema->table(self::TABLE_NAME, function ($table): void {
+                $table->dropUnique('pb_domain_refresh_account_type_unique');
+            });
+        } catch (\Throwable $exception) {
+            // Legacy unique index is absent; nothing to drop.
+        }
+
+        try {
+            $schema->table(self::TABLE_NAME, function ($table): void {
+                $table->unique(['account_hash', 'data_type', 'domain'], 'pb_domain_refresh_account_type_domain_unique');
+            });
+        } catch (\Throwable $exception) {
+            // Index already present.
+        }
     }
 
     private static function capsuleClass(): string

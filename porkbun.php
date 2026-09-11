@@ -19,6 +19,7 @@ require_once __DIR__ . '/src/Operations/TransferDomainOperation.php';
 require_once __DIR__ . '/src/Operations/RenewDomainOperation.php';
 require_once __DIR__ . '/src/Operations/SyncDomainOperation.php';
 require_once __DIR__ . '/src/Operations/GetNameserversOperation.php';
+require_once __DIR__ . '/src/Operations/RefreshNameserversOperation.php';
 require_once __DIR__ . '/src/Operations/SaveNameserversOperation.php';
 require_once __DIR__ . '/src/Operations/GetContactDetailsOperation.php';
 require_once __DIR__ . '/src/Operations/SaveContactDetailsOperation.php';
@@ -37,6 +38,7 @@ use PorkbunWhmcs\Registrar\Operations\RenewDomainOperation;
 use PorkbunWhmcs\Registrar\Operations\SyncDomainOperation;
 use PorkbunWhmcs\Registrar\Operations\TransferDomainOperation;
 use PorkbunWhmcs\Registrar\Operations\GetNameserversOperation;
+use PorkbunWhmcs\Registrar\Operations\RefreshNameserversOperation;
 use PorkbunWhmcs\Registrar\Operations\SaveNameserversOperation;
 use PorkbunWhmcs\Registrar\Operations\GetContactDetailsOperation;
 use PorkbunWhmcs\Registrar\Operations\SaveContactDetailsOperation;
@@ -315,10 +317,10 @@ function porkbun_mapNameserversToWhmcs(array $nameservers): array
  * @param array<string, mixed> $request
  * @param array<string, mixed> $response
  */
-function porkbun_logModuleCall(array $params, string $action, array $request, array $response): void
+function porkbun_logModuleCall(array $params, string $action, array $request, array $response, bool $force = false): void
 {
     $isDebugEnabled = isset($params['debugLogging']) && (string) $params['debugLogging'] === 'on';
-    if (!$isDebugEnabled || !function_exists('logModuleCall')) {
+    if ((!$isDebugEnabled && !$force) || !function_exists('logModuleCall')) {
         return;
     }
 
@@ -890,17 +892,33 @@ function porkbun_RenewDomain(array $params): array
 
 /**
  * @param array<string, mixed> $params
- * @return array{active?: bool, expired?: bool, expirydate?: string, transferredAway?: bool, error?: string}
+ * @return array{active?: bool, cancelled?: bool, expirydate?: string, transferredAway?: bool, error?: string}
  */
 function porkbun_Sync(array $params): array
 {
     $domain = porkbun_getDomainName($params);
     if ($domain === null) {
+        porkbun_logModuleCall(
+            $params,
+            'Sync',
+            ['operation' => 'SyncDomain'],
+            ['success' => false, 'error' => 'missing_domain'],
+            true
+        );
+
         return ['error' => 'Configuration error: missing required domain information.'];
     }
 
     $client = porkbun_createClientFromParams($params);
     if ($client === null) {
+        porkbun_logModuleCall(
+            $params,
+            'Sync',
+            ['operation' => 'SyncDomain', 'domain' => $domain],
+            ['success' => false, 'error' => 'missing_api_credentials'],
+            true
+        );
+
         return ['error' => 'Configuration error: missing API credentials.'];
     }
 
@@ -921,7 +939,8 @@ function porkbun_Sync(array $params): array
             'syncedExpiryDate' => (string) ($result['syncedExpiryDate'] ?? ''),
             'guardrail' => (string) ($result['guardrail'] ?? ''),
             'context' => $result['context'] ?? [],
-        ]
+        ],
+        true
     );
 
     if (($result['success'] ?? false) !== true) {
@@ -932,8 +951,8 @@ function porkbun_Sync(array $params): array
 
     $syncResponse = [
         'expirydate' => (string) ($result['syncedExpiryDate'] ?? ''),
-        'active' => (bool) ($result['active'] ?? true),
-        'expired' => (bool) ($result['expired'] ?? false),
+        'active' => (bool) ($result['active'] ?? false),
+        'cancelled' => (bool) ($result['cancelled'] ?? false),
         'transferredAway' => (bool) ($result['transferredAway'] ?? false),
     ];
 
@@ -942,6 +961,203 @@ function porkbun_Sync(array $params): array
     }
 
     return $syncResponse;
+}
+
+/**
+ * Resolves the WHMCS domain ID for a sync request.
+ *
+ * @param array<string, mixed> $params
+ */
+function porkbun_resolveWhmcsDomainId(array $params, string $domain): int
+{
+    $domainId = isset($params['domainid']) ? (int) $params['domainid'] : 0;
+    if ($domainId > 0) {
+        return $domainId;
+    }
+
+    if (!class_exists('\\WHMCS\\Database\\Capsule')) {
+        return 0;
+    }
+
+    try {
+        $capsule = '\\WHMCS\\Database\\Capsule';
+        /** @var object|null $row */
+        $row = $capsule::table('tbldomains')->where('domain', $domain)->first();
+
+        return is_object($row) && isset($row->id) ? (int) $row->id : 0;
+    } catch (\Throwable $exception) {
+        return 0;
+    }
+}
+
+/**
+ * Reads the current WHMCS domain status, preferring the module parameters.
+ *
+ * @param array<string, mixed> $params
+ */
+function porkbun_getCurrentDomainStatus(array $params, int $domainId): ?string
+{
+    $paramStatus = isset($params['status']) ? trim((string) $params['status']) : '';
+    if ($paramStatus !== '') {
+        return $paramStatus;
+    }
+
+    if ($domainId <= 0 || !class_exists('\\WHMCS\\Database\\Capsule')) {
+        return null;
+    }
+
+    try {
+        $capsule = '\\WHMCS\\Database\\Capsule';
+        /** @var object|null $row */
+        $row = $capsule::table('tbldomains')->where('id', $domainId)->first();
+        if (is_object($row) && isset($row->status)) {
+            return trim((string) $row->status);
+        }
+    } catch (\Throwable $exception) {
+        return null;
+    }
+
+    return null;
+}
+
+function porkbun_shouldSyncNextDueDate(): bool
+{
+    if (!class_exists('\\WHMCS\\Config\\Setting')) {
+        return false;
+    }
+
+    try {
+        $setting = '\\WHMCS\\Config\\Setting';
+        $value = $setting::getValue('DomainSyncNextDueDate');
+
+        return in_array(strtolower(trim((string) $value)), ['on', '1', 'yes', 'true'], true);
+    } catch (\Throwable $exception) {
+        return false;
+    }
+}
+
+/**
+ * Maps a sync result to a WHMCS domain status, or null when status should not change.
+ *
+ * @param array<string, mixed> $syncResult
+ */
+function porkbun_mapSyncResultToWhmcsStatus(array $syncResult, ?string $currentStatus = null): ?string
+{
+    if (($syncResult['transferredAway'] ?? false) === true) {
+        return 'Transferred Away';
+    }
+
+    if (($syncResult['cancelled'] ?? false) === true) {
+        return 'Cancelled';
+    }
+
+    if (($syncResult['active'] ?? false) === true && $currentStatus !== null) {
+        $normalized = strtolower(trim($currentStatus));
+        if (in_array($normalized, ['expired', 'cancelled', 'transferred away'], true)) {
+            return 'Active';
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Builds the UpdateClientDomain field set for a sync result.
+ *
+ * @param array<string, mixed> $syncResult
+ * @return array<string, string>
+ */
+function porkbun_buildDomainSyncUpdate(array $syncResult, ?string $currentStatus = null, bool $updateNextDueDate = false): array
+{
+    $update = [];
+
+    $expiryDate = trim((string) ($syncResult['expirydate'] ?? ''));
+    if ($expiryDate !== '') {
+        $update['expirydate'] = $expiryDate;
+        if ($updateNextDueDate) {
+            $update['nextduedate'] = $expiryDate;
+        }
+    }
+
+    $status = porkbun_mapSyncResultToWhmcsStatus($syncResult, $currentStatus);
+    if ($status !== null) {
+        $update['status'] = $status;
+    }
+
+    return $update;
+}
+
+/**
+ * Applies a sync update to the WHMCS domain record.
+ *
+ * @param array<string, string> $update
+ * @return array{success: bool, details: string}
+ */
+function porkbun_applyDomainSyncUpdate(int $domainId, array $update): array
+{
+    if ($domainId <= 0) {
+        return [
+            'success' => false,
+            'details' => 'Missing WHMCS domain ID for sync update.',
+        ];
+    }
+
+    if ($update === []) {
+        return [
+            'success' => true,
+            'details' => 'No WHMCS domain changes were required.',
+        ];
+    }
+
+    if (function_exists('localAPI')) {
+        try {
+            /** @var array<string, mixed> $response */
+            $response = call_user_func('localAPI', 'UpdateClientDomain', ['domainid' => (string) $domainId] + $update);
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'details' => 'WHMCS domain update failed: ' . $exception->getMessage(),
+            ];
+        }
+
+        if (is_array($response) && strtolower((string) ($response['result'] ?? '')) === 'success') {
+            return [
+                'success' => true,
+                'details' => 'WHMCS domain record updated.',
+            ];
+        }
+
+        $message = is_array($response)
+            ? trim((string) ($response['message'] ?? $response['error'] ?? 'Unknown WHMCS API error.'))
+            : 'Unknown WHMCS API error.';
+
+        return [
+            'success' => false,
+            'details' => 'WHMCS domain update failed: ' . ($message !== '' ? $message : 'Unknown WHMCS API error.'),
+        ];
+    }
+
+    if (!class_exists('\\WHMCS\\Database\\Capsule')) {
+        return [
+            'success' => false,
+            'details' => 'WHMCS domain update is unavailable in this context.',
+        ];
+    }
+
+    try {
+        $capsule = '\\WHMCS\\Database\\Capsule';
+        $capsule::table('tbldomains')->where('id', $domainId)->update($update);
+
+        return [
+            'success' => true,
+            'details' => 'WHMCS domain record updated via database.',
+        ];
+    } catch (\Throwable $exception) {
+        return [
+            'success' => false,
+            'details' => 'WHMCS domain update failed: ' . $exception->getMessage(),
+        ];
+    }
 }
 
 /**
@@ -954,10 +1170,46 @@ function porkbun_syncnow(array $params): array
 {
     $domain = porkbun_getDomainName($params);
     if ($domain === null) {
+        porkbun_logModuleCall(
+            $params,
+            'ManualSyncNow',
+            ['operation' => 'ManualSyncNow'],
+            ['success' => false, 'error' => 'missing_domain'],
+            true
+        );
+
         return porkbun_errorResponse('Configuration error: missing required domain information.');
     }
 
+    $domainId = porkbun_resolveWhmcsDomainId($params, $domain);
     $syncResult = porkbun_Sync($params);
+
+    if (isset($syncResult['error'])) {
+        porkbun_logModuleCall(
+            $params,
+            'ManualSyncNow',
+            [
+                'operation' => 'ManualSyncNow',
+                'domain' => $domain,
+                'domainId' => $domainId,
+            ],
+            [
+                'success' => false,
+                'error' => (string) $syncResult['error'],
+            ],
+            true
+        );
+
+        return porkbun_errorResponse((string) $syncResult['error']);
+    }
+
+    $currentStatus = porkbun_getCurrentDomainStatus($params, $domainId);
+    $update = porkbun_buildDomainSyncUpdate(
+        $syncResult,
+        $currentStatus,
+        porkbun_shouldSyncNextDueDate()
+    );
+    $applyResult = porkbun_applyDomainSyncUpdate($domainId, $update);
 
     porkbun_logModuleCall(
         $params,
@@ -965,19 +1217,27 @@ function porkbun_syncnow(array $params): array
         [
             'operation' => 'ManualSyncNow',
             'domain' => $domain,
+            'domainId' => $domainId,
         ],
         [
-            'success' => !isset($syncResult['error']),
+            'success' => ($applyResult['success'] ?? false) === true,
             'expirydate' => (string) ($syncResult['expirydate'] ?? ''),
+            'previousStatus' => (string) ($currentStatus ?? ''),
+            'targetStatus' => (string) ($update['status'] ?? ''),
             'active' => (bool) ($syncResult['active'] ?? false),
-            'expired' => (bool) ($syncResult['expired'] ?? false),
+            'cancelled' => (bool) ($syncResult['cancelled'] ?? false),
             'transferredAway' => (bool) ($syncResult['transferredAway'] ?? false),
-            'error' => (string) ($syncResult['error'] ?? ''),
-        ]
+            'update' => $update,
+            'details' => (string) ($applyResult['details'] ?? ''),
+            'error' => (($applyResult['success'] ?? false) === true) ? '' : (string) ($applyResult['details'] ?? ''),
+        ],
+        true
     );
 
-    if (isset($syncResult['error'])) {
-        return porkbun_errorResponse((string) $syncResult['error']);
+    if (($applyResult['success'] ?? false) !== true) {
+        return porkbun_errorResponse(
+            'Operation failed: ManualSyncNow for ' . $domain . '. Reason: ' . ($applyResult['details'] ?? 'Unable to update WHMCS domain record.')
+        );
     }
 
     return porkbun_successResponse();
@@ -1148,9 +1408,16 @@ function porkbun_runDomainCacheRefreshQueue(array $params = [], string $source =
         $accountHash = (string) ($job['accountHash'] ?? '');
         $attempts = (int) ($job['attempts'] ?? 0);
         $type = strtolower(trim((string) ($job['dataType'] ?? '')));
+        $jobDomain = strtolower(trim((string) ($job['domain'] ?? '')));
 
         if ($jobId <= 0 || $accountHash === '' || !in_array($type, ['lock', 'nameservers'], true)) {
             $failed++;
+            continue;
+        }
+
+        if ($type === 'nameservers' && $jobDomain === '') {
+            // Legacy account-wide nameserver job cannot be satisfied from listAll; drop it.
+            DomainRefreshQueue::complete($jobId);
             continue;
         }
 
@@ -1172,9 +1439,17 @@ function porkbun_runDomainCacheRefreshQueue(array $params = [], string $source =
         }
 
         $ttl = porkbun_getLockCacheTtl($contexts[$accountHash]);
-        $result = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
+
+        if ($type === 'nameservers') {
+            $result = RefreshNameserversOperation::execute($client, $jobDomain, $ttl);
+        } else {
+            $result = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
+            if (($result['success'] ?? false) === true) {
+                porkbun_recordCacheHydrationStatus($result, $source);
+            }
+        }
+
         if (($result['success'] ?? false) === true) {
-            porkbun_recordCacheHydrationStatus($result, $source);
             DomainRefreshQueue::complete($jobId);
             $processed++;
             continue;

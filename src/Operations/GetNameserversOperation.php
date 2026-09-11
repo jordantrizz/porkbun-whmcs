@@ -23,6 +23,7 @@ final class GetNameserversOperation
     {
         $normalizedDomain = strtolower(trim($domain));
         $accountHash = $client->getCredentialFingerprint();
+        $endpoint = '/domain/getNs/' . $normalizedDomain;
         $cached = DomainCache::get($accountHash, $normalizedDomain, 'nameservers');
 
         if (is_array($cached)) {
@@ -31,7 +32,7 @@ final class GetNameserversOperation
                 $isStale = (string) ($cached['freshness'] ?? '') === 'stale';
                 $queued = false;
                 if ($isStale) {
-                    $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds);
+                    $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds, null, $normalizedDomain);
                 }
 
                 return [
@@ -40,7 +41,7 @@ final class GetNameserversOperation
                     'context' => [
                         'request' => [
                             'operation' => 'GetNameservers',
-                            'endpoint' => '/domain/listAll',
+                            'endpoint' => $endpoint,
                         ],
                         'count' => count($nameservers),
                         'source' => $isStale ? 'cache-stale' : 'cache',
@@ -48,14 +49,14 @@ final class GetNameserversOperation
                     ],
                     'request' => [
                         'operation' => 'GetNameservers',
-                        'endpoint' => '/domain/listAll',
+                        'endpoint' => $endpoint,
                         'payload' => [],
                     ],
                 ];
             }
         }
 
-        $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds);
+        $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds, null, $normalizedDomain);
 
         return [
             'success' => false,
@@ -65,58 +66,18 @@ final class GetNameserversOperation
             'context' => [
                 'request' => [
                     'operation' => 'GetNameservers',
-                    'endpoint' => '/domain/listAll',
+                    'endpoint' => $endpoint,
                 ],
                 'source' => 'cache-miss',
                 'refreshQueued' => $queued,
             ],
             'request' => [
                 'operation' => 'GetNameservers',
-                'endpoint' => '/domain/listAll',
+                'endpoint' => $endpoint,
                 'payload' => [],
             ],
         ];
     }
-
-    /**
-     * @param array<string, mixed> $data
-     * @return array<int, string>
-     */
-    private static function extractNameservers(array $data): array
-    {
-        $candidates = [
-            $data['ns'] ?? null,
-            $data['nameservers'] ?? null,
-            $data['domain']['ns'] ?? null,
-            $data['domain']['nameservers'] ?? null,
-        ];
-
-        foreach ($candidates as $candidate) {
-            if (!is_array($candidate)) {
-                continue;
-            }
-
-            $normalized = [];
-            foreach ($candidate as $item) {
-                if (!is_string($item)) {
-                    continue;
-                }
-
-                $value = trim($item);
-                if ($value === '') {
-                    continue;
-                }
-
-                $normalized[] = strtolower($value);
-            }
-
-            if ($normalized !== []) {
-                return array_values(array_unique($normalized));
-             }
-         }
-
-         return [];
-     }
 
     /**
      * @param array<string, mixed> $data
