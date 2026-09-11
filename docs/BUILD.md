@@ -66,6 +66,8 @@ Exit criteria:
 
 - [x] Implement porkbun_Sync (or WHMCS-supported equivalent sync function) for domain status + expiry date synchronization.
 - [x] Ensure synced expiry/next renewal dates update WHMCS domain records correctly.
+- [x] Return WHMCS-recognized status keys (`active`, `cancelled`, `transferredAway`) and map registry status correctly.
+- [x] Persist manual admin sync results to WHMCS through `UpdateClientDomain`.
 - [ ] Validate behavior with WHMCS automation/cron so reminder and renewal invoice timing uses synced dates.
 - [x] Handle Porkbun/WHMCS date format conversions and timezone normalization safely.
 - [x] Add guardrails for stale or missing registry dates (safe fallback + clear logs).

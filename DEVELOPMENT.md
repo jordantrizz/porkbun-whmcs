@@ -50,7 +50,6 @@ Current config fields in module settings:
 - Request Timeout
 - Domain Cache TTL
 - Refresh Queue Cooldown
-- Domain Cache Status
 - Enable Debug Logging
 
 Guidance:
@@ -71,8 +70,10 @@ Guidance:
 - Domain input normalized to lowercase.
 - Nameserver output mapped to WHMCS ns1..ns5 format.
 - Contact objects mapped between WHMCS contact shape and Porkbun payload fields.
-- Sync maps registry expiry information from shared domain cache hydrated via `/domain/listAll` to WHMCS expirydate with regression guardrails.
-- Registrar lock and nameserver reads are cache-first with stale-while-revalidate behavior.
+- Sync maps registry expiry information from shared domain cache hydrated via `/domain/listAll` to WHMCS `expirydate` with regression guardrails.
+- Sync returns WHMCS-recognized `active`, `cancelled` and `transferredAway` flags (not `expired`) and maps registry `status` accordingly.
+- The manual sync command persists results via `localAPI('UpdateClientDomain')`, writing `expirydate`, optional `nextduedate`, and a mapped status.
+- Registrar lock reads are cache-first and hydrated from `/domain/listAll` `securityLock`; nameserver reads are cache-first and refreshed per domain from `/domain/getNs/{domain}`.
 
 ## Domain Cache
 
@@ -81,12 +82,13 @@ Guidance:
 - Key: (`account_hash`, `domain`, `data_type`)
 - Queue class: [src/DomainRefreshQueue.php](src/DomainRefreshQueue.php)
 - Queue table: `mod_porkbun_domain_refresh_queue`
+- Queue key: (`account_hash`, `data_type`, `domain`) after the domain-aware migration; lock jobs use an empty `domain`.
 - Module state table: `mod_porkbun_module_state`
 - Account partitioning: `account_hash` is a SHA-256 fingerprint of API key + secret from `ApiClient::getCredentialFingerprint()`.
 - Cached data types in current implementation:
-	- `lock` (bool)
-	- `nameservers` (array<string>)
-	- `sync` (array<string, mixed>)
+	- `lock` (bool) from `/domain/listAll` `securityLock`
+	- `nameservers` (array<string>) from `/domain/getNs/{domain}`
+	- `sync` (array<string, mixed>) from `/domain/listAll` `expireDate` and `status`
 - Freshness columns:
 	- `fetched_at` (unix timestamp)
 	- `stale_at` (unix timestamp)
@@ -95,23 +97,31 @@ Guidance:
 - Default TTL: 3600 seconds (`Domain Cache TTL` setting overrides per module config; minimum effective TTL is 60 seconds in writer)
 - Expired-row cleanup: opportunistic cleanup runs during writes (approx. 1% of writes), deleting entries older than one day past `expires_at`.
 
+### Queue Table Migration
+
+- `mod_porkbun_domain_refresh_queue` gained a `domain` column and the unique key changed from (`account_hash`, `data_type`) to (`account_hash`, `data_type`, `domain`) so multiple domains can queue per account/type.
+- Migration runs lazily inside `DomainRefreshQueue::ensureTable()` on the first queue operation after upgrade (add column, drop legacy unique index, add new index). Each step is guarded and the routine retries on later requests until it succeeds; no manual SQL is required.
+- Fresh installs create the final schema directly.
+- Legacy rows created before the migration have an empty `domain`. Domain-less `nameservers` jobs cannot be satisfied from `/domain/listAll` and are discarded; the next `GetNameservers` read re-queues a per-domain job.
+
 ### Cache Read Flow
 
 1. `porkbun_GetRegistrarLock` and `porkbun_GetNameservers` check `DomainCache` first.
 2. Fresh cache entries return immediately.
-3. Stale cache entries return immediately and enqueue non-blocking refresh jobs.
+3. Stale cache entries return immediately and enqueue non-blocking refresh jobs (lock = account-wide, nameservers = per domain).
 4. Cache misses enqueue non-blocking refresh jobs and return safe operation responses.
 
 ### Refresh Queue Flow
 
-1. Queue requests are deduplicated by (`account_hash`, `data_type`) with cooldown window.
-2. Queue processor function `porkbun_ProcessDomainCacheRefreshQueue` claims jobs and runs shared hydration.
-3. Shared hydrator [src/Operations/HydrateDomainCacheFromListAllOperation.php](src/Operations/HydrateDomainCacheFromListAllOperation.php) fetches `/domain/listAll` and updates both lock and nameserver cache entries.
-4. Successful jobs are removed; failures are retried with backoff and eventually marked failed.
-5. Automatic processing is registered through WHMCS native `DailyCronJob` hook in [porkbun.php](porkbun.php).
-6. Cron credential resolution reads the module's configured settings from `tblregistrars` and matches queued jobs by `ApiClient::getCredentialFingerprint()`.
-7. If WHMCS exposes encrypted password values at rest, the resolver attempts `decrypt()` when available for `secretApiKey`.
-8. Successful shared hydrations record module-owned runtime state so the settings page can show the last full cache hydration and the last observed queue processor run.
+1. Queue requests are deduplicated by (`account_hash`, `data_type`, `domain`) with cooldown window.
+2. Queue processor function `porkbun_ProcessDomainCacheRefreshQueue` claims jobs and processes them by type.
+3. `lock` jobs run the shared hydrator [src/Operations/HydrateDomainCacheFromListAllOperation.php](src/Operations/HydrateDomainCacheFromListAllOperation.php), which fetches `/domain/listAll` and refreshes lock and sync cache entries.
+4. `nameservers` jobs run [src/Operations/RefreshNameserversOperation.php](src/Operations/RefreshNameserversOperation.php), which fetches `/domain/getNs/{domain}` and writes that domain's nameserver cache entry.
+5. Successful jobs are removed; failures are retried with backoff and eventually marked failed.
+6. Automatic processing is registered through WHMCS native `DailyCronJob` hook in [porkbun.php](porkbun.php).
+7. Cron credential resolution reads the module's configured settings from `tblregistrars` and matches queued jobs by `ApiClient::getCredentialFingerprint()`.
+8. If WHMCS exposes encrypted password values at rest, the resolver attempts `decrypt()` when available for `secretApiKey`.
+9. Successful listAll hydrations record module-owned runtime state so the settings page can show the last full cache hydration and the last observed queue processor run.
 
 ### Addon Admin Page Cache Controls
 
@@ -154,6 +164,7 @@ Guidance:
 
 - Logging path uses sanitized payloads.
 - Debug logs include module version metadata.
+- Sync outcomes (automatic `Sync` and manual `ManualSyncNow`) are always written to the module log, even when `Enable Debug Logging` is off; other operations remain gated by the debug setting.
 - Request correlation IDs are generated per API call.
 - In-memory request metrics track success/failure and average latency per operation.
 

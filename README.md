@@ -20,14 +20,14 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 | Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
 | Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
 | Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
-| Sync | porkbun_Sync | Supported | Uses shared domain cache hydrated from `/domain/listAll` with renewal-date guardrails |
-| Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button to manually sync expiry date and domain status |
-| Get Nameservers | porkbun_GetNameservers | Supported | Cache-first nameserver lookup with stale-while-revalidate |
+| Sync | porkbun_Sync | Supported | Returns WHMCS `expirydate` plus `active`/`cancelled`/`transferredAway` from shared cache with renewal-date guardrails |
+| Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button that persists synced expiry date and status to WHMCS via `UpdateClientDomain` |
+| Get Nameservers | porkbun_GetNameservers | Supported | Cache-first nameserver lookup refreshed per domain from `/domain/getNs/{domain}` |
 | Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
 | Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
 | Save Contact Details | porkbun_SaveContactDetails | Supported | Maps WHMCS contacts to API payload |
 | Get EPP Code | porkbun_GetEPPCode | Supported | TLD-dependent on registry support |
-| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup with stale-while-revalidate |
+| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup hydrated from `/domain/listAll` `securityLock` |
 | Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping with cache write-through |
 | Get DNS | porkbun_GetDNS | Not supported | Returns explicit limitation error |
 | Save DNS | porkbun_SaveDNS | Not supported | Returns explicit limitation error |
@@ -60,6 +60,8 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 3. Re-run Test Connection.
 4. Re-validate sync behavior, nameservers, and contacts on a test domain.
 
+Upgrade note: the first cache or queue operation after upgrading automatically migrates `mod_porkbun_domain_refresh_queue` by adding the `domain` column and replacing the legacy (`account_hash`, `data_type`) unique index with (`account_hash`, `data_type`, `domain`). The migration is attempted until it succeeds and is safe to retry; no manual SQL is required. Legacy account-wide nameserver jobs are discarded and re-queued per domain on the next nameserver read.
+
 ### Rollback
 
 1. Restore previous module files from backup.
@@ -70,6 +72,7 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 
 - DNS operations are currently returned as explicitly unsupported.
 - If Porkbun returns `DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS` for nameserver reads, the module returns a warning and uses existing WHMCS nameserver values instead of hard failing domain access.
+- The manual sync command reports a domain missing from `/domain/listAll` as an error and does not automatically mark it `Transferred Away`; this avoids mass status changes if the API key is pointed at a different Porkbun account.
 - EPP code availability is TLD and registry policy dependent.
 - Registrar lock behavior can vary by TLD policy.
 - Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
@@ -77,12 +80,15 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 ## Domain Cache
 
 - Domain reads use a persistent WHMCS DB cache (`mod_porkbun_domain_cache`) keyed by account fingerprint, domain, and data type.
-- Current cached data types: `lock`, `nameservers`, `sync`.
+- Current cached data types and sources:
+	- `lock` (bool) from `/domain/listAll` `securityLock`
+	- `nameservers` (array<string>) from `/domain/getNs/{domain}` (listAll does not return nameservers)
+	- `sync` (array<string, mixed>) from `/domain/listAll` `expireDate` and `status`
 - Cache default TTL is 3600 seconds and can be changed with module setting `Domain Cache TTL`.
 - Stale-while-revalidate behavior:
 	- stale entries are returned immediately for non-blocking reads
 	- stale/missing reads enqueue refresh work in `mod_porkbun_domain_refresh_queue`
-	- queue processing hydrates from `/domain/listAll` and writes back to cache
+	- queue processing hydrates locks from `/domain/listAll` and nameservers per domain from `/domain/getNs/{domain}`
 - Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
 - Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
 
@@ -102,6 +108,12 @@ This module integrates WHMCS registrar operations with the Porkbun API for domai
 - A Registrar Commands button named `Sync Expiry and Status` is exposed in the WHMCS domain admin view.
 - The command runs a manual sync against Porkbun for domains transferred from another registrar.
 - The sync hydrates shared domain cache data from `/domain/listAll` and then resolves the requested domain from cache for expiry and status updates.
+- Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')` (with a direct database fallback).
+- Persisted fields:
+	- `expirydate` is written when a valid registry date is resolved.
+	- `nextduedate` is written only when the WHMCS `Sync Next Due Date` automation setting is enabled.
+	- `status` is written as `Transferred Away` or `Cancelled` when the registry status indicates it, or as `Active` to reactivate a WHMCS domain currently marked `Expired`/`Cancelled`/`Transferred Away`.
+- If the WHMCS domain update fails, the command returns a safe error; sync outcomes are always logged regardless of the debug logging setting.
 
 ## Documentation
 
