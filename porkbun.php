@@ -894,7 +894,7 @@ function porkbun_RenewDomain(array $params): array
  * @param array<string, mixed> $params
  * @return array{active?: bool, cancelled?: bool, expirydate?: string, transferredAway?: bool, error?: string}
  */
-function porkbun_Sync(array $params): array
+function porkbun_Sync(array $params, bool $forceRefresh = false): array
 {
     $domain = porkbun_getDomainName($params);
     if ($domain === null) {
@@ -923,7 +923,7 @@ function porkbun_Sync(array $params): array
     }
 
     $previousExpiryDate = porkbun_getPreviousExpiryDate($params);
-    $result = SyncDomainOperation::execute($client, $domain, $previousExpiryDate, porkbun_getLockCacheTtl($params));
+    $result = SyncDomainOperation::execute($client, $domain, $previousExpiryDate, porkbun_getLockCacheTtl($params), $forceRefresh);
 
     porkbun_logModuleCall(
         $params,
@@ -1182,7 +1182,7 @@ function porkbun_syncnow(array $params): array
     }
 
     $domainId = porkbun_resolveWhmcsDomainId($params, $domain);
-    $syncResult = porkbun_Sync($params);
+    $syncResult = porkbun_Sync($params, true);
 
     if (isset($syncResult['error'])) {
         porkbun_logModuleCall(

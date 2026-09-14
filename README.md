@@ -89,6 +89,7 @@ Upgrade note: the first cache or queue operation after upgrading automatically m
 	- stale entries are returned immediately for non-blocking reads
 	- stale/missing reads enqueue refresh work in `mod_porkbun_domain_refresh_queue`
 	- queue processing hydrates locks from `/domain/listAll` and nameservers per domain from `/domain/getNs/{domain}`
+- Sync reads refresh stale `sync` cache entries from `/domain/listAll` before resolving; the manual admin sync always forces a fresh read.
 - Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
 - Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
 
@@ -107,6 +108,7 @@ Upgrade note: the first cache or queue operation after upgrading automatically m
 
 - A Registrar Commands button named `Sync Expiry and Status` is exposed in the WHMCS domain admin view.
 - The command runs a manual sync against Porkbun for domains transferred from another registrar.
+- The command always forces a fresh `/domain/listAll` registry read, so it never reuses a previously cached (possibly pre-renewal) expiry date.
 - The sync hydrates shared domain cache data from `/domain/listAll` and then resolves the requested domain from cache for expiry and status updates.
 - Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')` (with a direct database fallback).
 - Persisted fields:

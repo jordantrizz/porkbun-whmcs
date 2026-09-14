@@ -25,35 +25,54 @@ final class SyncDomainOperation
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain, ?string $previousExpiryDate, ?int $cacheTtlSeconds = null): array
+    public static function execute(ApiClient $client, string $domain, ?string $previousExpiryDate, ?int $cacheTtlSeconds = null, bool $forceRefresh = false): array
     {
         $normalizedDomain = strtolower(trim($domain));
         $accountHash = $client->getCredentialFingerprint();
         $ttl = $cacheTtlSeconds ?? DomainCache::defaultTtlSeconds();
 
-        $cached = self::getCachedSyncData($accountHash, $normalizedDomain);
-        if ($cached === null) {
+        $cachedRecord = DomainCache::get($accountHash, $normalizedDomain, 'sync');
+        $cached = (is_array($cachedRecord) && is_array($cachedRecord['value'] ?? null)) ? $cachedRecord['value'] : null;
+        $isStale = is_array($cachedRecord) && (string) ($cachedRecord['freshness'] ?? '') === 'stale';
+        $source = $isStale ? 'cache-stale' : 'cache';
+
+        if ($forceRefresh || $cached === null || $isStale) {
+            $startedAt = time();
             $hydrated = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
+
             if (($hydrated['success'] ?? false) !== true) {
-                $errorContext = is_array($hydrated['context'] ?? null) ? $hydrated['context'] : [];
+                if ($forceRefresh || $cached === null) {
+                    $errorContext = is_array($hydrated['context'] ?? null) ? $hydrated['context'] : [];
 
-                return [
-                    'success' => false,
-                    'details' => (string) ($hydrated['details'] ?? 'Sync request failed.'),
-                    'context' => [
-                        'request' => $errorContext['request'] ?? [],
-                        'errorType' => (string) ($errorContext['errorType'] ?? 'unknown'),
-                        'statusCode' => (int) ($errorContext['statusCode'] ?? 0),
-                    ],
-                    'request' => [
-                        'operation' => 'SyncDomain',
-                        'endpoint' => '/domain/listAll',
-                        'payload' => [],
-                    ],
-                ];
+                    return [
+                        'success' => false,
+                        'details' => (string) ($hydrated['details'] ?? 'Sync request failed.'),
+                        'context' => [
+                            'request' => $errorContext['request'] ?? [],
+                            'errorType' => (string) ($errorContext['errorType'] ?? 'unknown'),
+                            'statusCode' => (int) ($errorContext['statusCode'] ?? 0),
+                        ],
+                        'request' => [
+                            'operation' => 'SyncDomain',
+                            'endpoint' => '/domain/listAll',
+                            'payload' => [],
+                        ],
+                    ];
+                }
+            } else {
+                $freshRecord = DomainCache::get($accountHash, $normalizedDomain, 'sync');
+                $freshFetchedAt = is_array($freshRecord) ? (int) ($freshRecord['fetchedAt'] ?? 0) : 0;
+                $hasFreshValue = is_array($freshRecord)
+                    && is_array($freshRecord['value'] ?? null)
+                    && $freshFetchedAt >= $startedAt;
+
+                if ($hasFreshValue) {
+                    $cached = $freshRecord['value'];
+                    $source = 'live';
+                } elseif ($forceRefresh) {
+                    $cached = null;
+                }
             }
-
-            $cached = self::getCachedSyncData($accountHash, $normalizedDomain);
         }
 
         if ($cached === null) {
@@ -137,7 +156,7 @@ final class SyncDomainOperation
                     'endpoint' => '/domain/listAll',
                 ],
                 'status' => $status,
-                'source' => 'cache',
+                'source' => $source,
             ],
             'request' => [
                 'operation' => 'SyncDomain',
@@ -145,19 +164,6 @@ final class SyncDomainOperation
                 'payload' => [],
             ],
         ];
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    private static function getCachedSyncData(string $accountHash, string $domain): ?array
-    {
-        $cached = DomainCache::get($accountHash, $domain, 'sync');
-        if (!is_array($cached) || !is_array($cached['value'] ?? null)) {
-            return null;
-        }
-
-        return $cached['value'];
     }
 
     /**

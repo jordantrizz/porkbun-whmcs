@@ -242,6 +242,37 @@ if (function_exists('porkbun_applyDomainSyncUpdate')) {
     );
 }
 
+$syncOperationClass = 'PorkbunWhmcs\\Registrar\\Operations\\SyncDomainOperation';
+if (class_exists($syncOperationClass) && method_exists($syncOperationClass, 'execute')) {
+    try {
+        $executeMethod = new \ReflectionMethod($syncOperationClass, 'execute');
+        $forceParam = null;
+        foreach ($executeMethod->getParameters() as $parameter) {
+            if ($parameter->getName() === 'forceRefresh') {
+                $forceParam = $parameter;
+                break;
+            }
+        }
+
+        $forceOk = $forceParam !== null
+            && $forceParam->isOptional()
+            && (string) $forceParam->getType() === 'bool';
+    } catch (\Throwable $exception) {
+        $forceOk = false;
+    }
+
+    if (!$forceOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync refresh: SyncDomainOperation supports forced refresh',
+        $forceOk,
+        $forceOk ? 'execute() accepts an optional bool $forceRefresh.' : 'execute() is missing the optional bool $forceRefresh parameter.'
+    );
+}
+
 if (function_exists('porkbun_logModuleCall') && function_exists('porkbun_syncnow')) {
     $GLOBALS['porkbunTestModuleLogCalls'] = [];
     porkbun_logModuleCall(

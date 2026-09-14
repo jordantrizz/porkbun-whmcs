@@ -28,6 +28,7 @@ This changelog is generated from git release history and commit history.
 ### Fixed
 
 - Fixed the `Sync Expiry and Status` registrar command, which previously discarded the sync result and never updated the WHMCS domain record.
+- Sync no longer resolves from a stale `sync` cache entry: stale entries are refreshed from `/domain/listAll`, and the manual admin sync always forces a fresh registry read (prevents writing a pre-renewal expiry date).
 
 ## [0.1.0] - 2026-04-14
 
