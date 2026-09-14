@@ -3,6 +3,8 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\DomainCache;
+use PorkbunWhmcs\Registrar\DomainRefreshQueue;
 
 final class GetRegistrarLockOperation
 {
@@ -15,99 +17,64 @@ final class GetRegistrarLockOperation
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain): array
+    public static function execute(
+        ApiClient $client,
+        string $domain,
+        ?int $cacheTtlSeconds = null,
+        ?int $refreshCooldownSeconds = null
+    ): array
     {
-        $endpoint = '/domain/getLock/' . $domain;
-        $response = $client->request('GetRegistrarLock', $endpoint, []);
+        $ttl = $cacheTtlSeconds ?? DomainCache::defaultTtlSeconds();
+        $accountHash = $client->getCredentialFingerprint();
+        $normalizedDomain = strtolower(trim($domain));
 
-        if (($response['success'] ?? false) !== true) {
-            $error = is_array($response['error'] ?? null) ? $response['error'] : [];
+        $cached = DomainCache::get($accountHash, $normalizedDomain, 'lock');
+        if (is_array($cached) && is_bool($cached['value'] ?? null)) {
+            $isStale = (string) ($cached['freshness'] ?? '') === 'stale';
+            $queued = false;
+            if ($isStale) {
+                $queued = DomainRefreshQueue::enqueue($accountHash, 'lock', $refreshCooldownSeconds);
+            }
 
             return [
-                'success' => false,
-                'details' => (string) ($error['message'] ?? 'Get registrar lock request failed.'),
+                'success' => true,
+                'lockEnabled' => (bool) $cached['value'],
                 'context' => [
-                    'request' => $response['context'] ?? [],
-                    'errorType' => (string) ($error['type'] ?? 'unknown'),
-                    'statusCode' => (int) ($error['statusCode'] ?? 0),
+                    'request' => [
+                        'operation' => 'GetRegistrarLock',
+                        'endpoint' => '/domain/listAll',
+                    ],
+                    'status' => 'success',
+                    'source' => $isStale ? 'cache-stale' : 'cache',
+                    'refreshQueued' => $queued,
                 ],
                 'request' => [
                     'operation' => 'GetRegistrarLock',
-                    'endpoint' => $endpoint,
+                    'endpoint' => '/domain/listAll',
                     'payload' => [],
                 ],
             ];
         }
 
-        $data = is_array($response['data'] ?? null) ? $response['data'] : [];
-        $lockState = self::extractLockState($data);
-        if ($lockState === null) {
-            return [
-                'success' => false,
-                'details' => 'Registry did not return lock state for this domain.',
-                'context' => [
-                    'request' => $response['context'] ?? [],
-                ],
-                'request' => [
-                    'operation' => 'GetRegistrarLock',
-                    'endpoint' => $endpoint,
-                    'payload' => [],
-                ],
-            ];
-        }
+        $queued = DomainRefreshQueue::enqueue($accountHash, 'lock', $refreshCooldownSeconds);
 
         return [
-            'success' => true,
-            'lockEnabled' => $lockState,
+            'success' => false,
+            'details' => 'Lock status is not available in cache yet. Refresh has been queued.',
             'context' => [
-                'request' => $response['context'] ?? [],
-                'status' => 'success',
+                'request' => [
+                    'operation' => 'GetRegistrarLock',
+                    'endpoint' => '/domain/listAll',
+                ],
+                'status' => 'cache_miss',
+                'refreshQueued' => $queued,
+                'ttlSeconds' => $ttl,
             ],
             'request' => [
                 'operation' => 'GetRegistrarLock',
-                'endpoint' => $endpoint,
+                'endpoint' => '/domain/listAll',
                 'payload' => [],
             ],
         ];
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private static function extractLockState(array $data): ?bool
-    {
-        $candidates = [
-            $data['locked'] ?? null,
-            $data['lock'] ?? null,
-            $data['registrarLock'] ?? null,
-            $data['domain']['locked'] ?? null,
-            $data['domain']['lock'] ?? null,
-            $data['domain']['registrarLock'] ?? null,
-        ];
-
-        foreach ($candidates as $candidate) {
-            if (is_bool($candidate)) {
-                return $candidate;
-            }
-
-            if (is_int($candidate)) {
-                return $candidate === 1;
-            }
-
-            if (!is_string($candidate)) {
-                continue;
-            }
-
-            $value = strtolower(trim($candidate));
-            if (in_array($value, ['1', 'true', 'on', 'yes', 'locked', 'enabled'], true)) {
-                return true;
-            }
-
-            if (in_array($value, ['0', 'false', 'off', 'no', 'unlocked', 'disabled'], true)) {
-                return false;
-            }
-        }
-
-        return null;
     }
 }

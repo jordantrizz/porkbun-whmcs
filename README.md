@@ -2,338 +2,142 @@
 
 WHMCS domain registrar module for Porkbun.
 
-This project implements a WHMCS Registrar Module that allows WHMCS to register, transfer, renew, manage nameservers, and manage contact details for domains through the Porkbun API.
+This module integrates WHMCS registrar operations with the Porkbun API for domain lifecycle management.
 
-## Supported Feature Matrix
-
-| WHMCS Registrar Operation | Module Function | Current Status | Notes |
-| --- | --- | --- | --- |
-| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, debug logging |
-| Test Connection | porkbun_TestConnection | Supported | Uses Porkbun ping endpoint |
-| Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
-| Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
-| Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
-| Sync | porkbun_Sync | Supported | Includes renewal-date guardrails |
-| Get Nameservers | porkbun_GetNameservers | Supported | Maps nameserver list to ns1..ns5 |
-| Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
-| Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
-| Save Contact Details | porkbun_SaveContactDetails | Supported | Maps WHMCS contacts to API payload |
-| Get EPP Code | porkbun_GetEPPCode | Supported | TLD-dependent on registry support |
-| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Normalized lock-state handling |
-| Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping |
-| Get DNS | porkbun_GetDNS | Not supported in module | Returns explicit limitation error |
-| Save DNS | porkbun_SaveDNS | Not supported in module | Returns explicit limitation error |
-
-## Compatibility Matrix
+## Compatibility
 
 - WHMCS: 8.8+
 - PHP: 8.1, 8.2, 8.3
 - Module type: Domain Registrar Module
 - API transport: HTTPS JSON requests to Porkbun API v3
 
-Notes:
+## Supported Features
 
-- Versions above are the current project target baseline for development and testing.
-- If a production environment uses older PHP/WHMCS, compatibility must be validated before rollout.
+| WHMCS Registrar Operation | Module Function | Status | Notes |
+| --- | --- | --- | --- |
+| Config | porkbun_getConfigArray | Supported | API key/secret, timeout, domain cache TTL, refresh cooldown, debug logging |
+| Test Connection | porkbun_TestConnection | Supported | Uses Porkbun ping endpoint |
+| Register | porkbun_RegisterDomain | Supported | Endpoint mapping implemented |
+| Transfer | porkbun_TransferDomain | Supported | Requires transfer auth/EPP code |
+| Renew | porkbun_RenewDomain | Supported | Endpoint mapping implemented |
+| Sync | porkbun_Sync | Supported | Returns WHMCS `expirydate` plus `active`/`cancelled`/`transferredAway` from shared cache with renewal-date guardrails |
+| Admin Custom Sync Command | porkbun_syncnow | Supported | Registrar Commands button that persists synced expiry date and status to WHMCS via `UpdateClientDomain` |
+| Get Nameservers | porkbun_GetNameservers | Supported | Cache-first nameserver lookup refreshed per domain from `/domain/getNs/{domain}` |
+| Save Nameservers | porkbun_SaveNameservers | Supported | Validates at least one nameserver |
+| Get Contact Details | porkbun_GetContactDetails | Supported | Maps API contacts to WHMCS shape |
+| Save Contact Details | porkbun_SaveContactDetails | Supported | Maps WHMCS contacts to API payload |
+| Get EPP Code | porkbun_GetEPPCode | Supported | TLD-dependent on registry support |
+| Get Registrar Lock | porkbun_GetRegistrarLock | Supported | Cache-first lock lookup hydrated from `/domain/listAll` `securityLock` |
+| Save Registrar Lock | porkbun_SaveRegistrarLock | Supported | Lock on/off request mapping with cache write-through |
+| Get DNS | porkbun_GetDNS | Not supported | Returns explicit limitation error |
+| Save DNS | porkbun_SaveDNS | Not supported | Returns explicit limitation error |
+| Cache Admin Page | porkbun_cache_admin_output | Supported | Companion addon module admin page for cache status and controls |
 
-## Goals
+## Installation
 
-- Implement a production-ready WHMCS registrar integration for Porkbun.
-- Follow WHMCS registrar module conventions and expected function signatures.
-- Keep credentials and API operations secure, auditable, and easy to troubleshoot.
-- Minimize behavioral surprises for WHMCS admins and customers.
+### Fresh Install
 
-## Scope
+1. Back up WHMCS files and database.
+2. Create module directory:
+- modules/registrars/porkbun/
+3. Copy module files into that directory:
+- porkbun.php
+- src/
+4. In WHMCS admin, go to:
+- Configuration > System Settings > Domain Registrars
+5. Activate the Porkbun registrar module.
+6. Enter API Key and Secret API Key.
+7. Configure timeout, domain cache TTL, refresh cooldown, and debug logging as needed.
+8. Run Test Connection.
+9. Validate register, transfer, renew, and sync in a test environment.
+10. Activate the companion addon module `Porkbun Cache Admin` from WHMCS Addon Modules if you want cache status and manual cache controls in the admin area.
 
-In scope:
+### Upgrade
 
-- Registrar module implementation under WHMCS registrar module standards.
-- Porkbun API authentication and domain lifecycle operations.
-- Logging, error normalization, and operational guidance.
-- Developer and agent documentation for consistent implementation.
+1. Back up current module files and database.
+2. Replace files in:
+- modules/registrars/porkbun/
+3. Re-run Test Connection.
+4. Re-validate sync behavior, nameservers, and contacts on a test domain.
 
-Out of scope for initial milestone:
+Upgrade note: the first cache or queue operation after upgrading automatically migrates `mod_porkbun_domain_refresh_queue` by adding the `domain` column and replacing the legacy (`account_hash`, `data_type`) unique index with (`account_hash`, `data_type`, `domain`). The migration is attempted until it succeeds and is safe to retry; no manual SQL is required. Legacy account-wide nameserver jobs are discarded and re-queued per domain on the next nameserver read.
 
-- WHMCS provisioning/addon module features unrelated to registrar actions.
-- Multi-registrar abstraction framework.
-- Billing customization unrelated to registrar module behavior.
+### Rollback
 
-## WHMCS Registrar Module Basics
-
-Primary reference:
-
-- WHMCS registrar module docs: https://developers.whmcs.com/domain-registrars/
-
-Sample implementation reference:
-
-- WHMCS sample registrar module: https://github.com/WHMCS/sample-registrar-module
-
-Typical registrar module path inside a WHMCS install:
-
-- modules/registrars/porkbun/porkbun.php
-
-Common function entry points to implement (names per WHMCS standard):
-
-- porkbun_getConfigArray
-- porkbun_RegisterDomain
-- porkbun_TransferDomain
-- porkbun_RenewDomain
-- porkbun_GetNameservers
-- porkbun_SaveNameservers
-- porkbun_GetContactDetails
-- porkbun_SaveContactDetails
-- porkbun_GetEPPCode
-- porkbun_GetRegistrarLock
-- porkbun_SaveRegistrarLock
-- porkbun_GetDNS
-- porkbun_SaveDNS
-- porkbun_IDProtectToggle (if supported by Porkbun API + TLD policy)
-
-Return contract reminders:
-
-- Success usually returns array("success" => true) or documented WHMCS equivalent.
-- Failures should return array("error" => "Human-readable message") and avoid leaking secrets.
-
-## Porkbun API Resources
-
-Primary API reference:
-
-- Porkbun API docs: https://porkbun.com/api/json/v3/documentation
-
-Porkbun platform resources:
-
-- Main site: https://porkbun.com/
-- Support: https://kb.porkbun.com/
-- API status and behavior should be validated against current docs before release.
-
-Authentication model (verify current docs):
-
-- API Key and Secret API Key are required.
-- Requests include credentials in request body for JSON endpoints.
-- Credentials must be stored in WHMCS registrar module settings and never logged.
-
-## Suggested Project Structure
-
-Repository currently includes documentation only. As implementation starts, use:
-
-- /README.md
-- /AGENTS.md
-- /TODO.md
-- /porkbun.php (module entrypoint while developing in repo root)
-- /src/ApiClient.php
-- /src/Mapper.php
-- /src/Errors.php
-- /src/Operations/RegisterDomain.php
-- /src/Operations/TransferDomain.php
-- /src/Operations/RenewDomain.php
-- /src/Operations/Nameservers.php
-- /src/Operations/Contacts.php
-- /src/Operations/DomainLock.php
-- /src/Operations/Dns.php
-- /tests/ (if test harness added)
-
-When deploying to WHMCS:
-
-- Copy module files into modules/registrars/porkbun/
-
-## Phase 0 Architecture Decision
-
-- Namespace: PorkbunWhmcs\\Registrar
-- File layout: thin WHMCS entrypoint in porkbun.php with src-based internal classes
-- Immediate base classes:
-- ApiClient: auth payload + request transport helper foundation
-- Mapper: normalize domain and date mapping logic
-- Errors: standardized WHMCS-safe error array generation
-
-## Configuration Fields (WHMCS Admin)
-
-Recommended registrar config fields in porkbun_getConfigArray:
-
-- API Key
-- Secret API Key
-- Use Sandbox (if Porkbun offers separate safe testing behavior)
-- Request Timeout (seconds)
-- Enable Debug Logging (non-sensitive)
-
-Guidance:
-
-- Keep labels admin-friendly.
-- Validate required fields before making API calls.
-- Fail fast with clear error text when credentials are missing.
-
-Admin validation flow:
-
-- Use module test connection support in WHMCS admin to validate API Key and Secret API Key.
-- The module performs a Porkbun API ping request and reports a success/failure result.
+1. Restore previous module files from backup.
+2. Re-test Test Connection.
+3. Re-run a sync check and confirm renewal-date behavior.
 
 ## Known Limitations
 
-- DNS operations in this module currently return an explicit unsupported-operation response.
-- EPP code availability is TLD and policy dependent; some domains may not return a code.
-- Registrar lock behavior can vary by TLD policy and registry constraints.
-- End-to-end reminder/invoice timing alignment requires WHMCS cron validation in a live test environment.
-- Live register/transfer/renew success depends on valid account state, domain eligibility, and Porkbun-side policy checks.
+- DNS operations are currently returned as explicitly unsupported.
+- If Porkbun returns `DOMAIN_IS_NOT_OPTED_IN_TO_API_ACCESS` for nameserver reads, the module returns a warning and uses existing WHMCS nameserver values instead of hard failing domain access.
+- The manual sync command reports a domain missing from `/domain/listAll` as an error and does not automatically mark it `Transferred Away`; this avoids mass status changes if the API key is pointed at a different Porkbun account.
+- EPP code availability is TLD and registry policy dependent.
+- Registrar lock behavior can vary by TLD policy.
+- Reminder and invoice timing alignment must be validated in live WHMCS cron behavior.
 
-## Implementation Notes
+## Domain Cache
 
-Domain formatting:
+- Domain reads use a persistent WHMCS DB cache (`mod_porkbun_domain_cache`) keyed by account fingerprint, domain, and data type.
+- Current cached data types and sources:
+	- `lock` (bool) from `/domain/listAll` `securityLock`
+	- `nameservers` (array<string>) from `/domain/getNs/{domain}` (listAll does not return nameservers)
+	- `sync` (array<string, mixed>) from `/domain/listAll` `expireDate` and `status`
+- Cache default TTL is 3600 seconds and can be changed with module setting `Domain Cache TTL`.
+- Stale-while-revalidate behavior:
+	- stale entries are returned immediately for non-blocking reads
+	- stale/missing reads enqueue refresh work in `mod_porkbun_domain_refresh_queue`
+	- queue processing hydrates locks from `/domain/listAll` and nameservers per domain from `/domain/getNs/{domain}`
+- Sync reads refresh stale `sync` cache entries from `/domain/listAll` before resolving; the manual admin sync always forces a fresh read.
+- Successful save operations (`SaveRegistrarLock`, `SaveNameservers`) perform cache write-through updates.
+- Automatic queue processing runs through WHMCS's native `DailyCronJob` hook when the WHMCS system cron executes.
 
-- Normalize domain input to lowercase.
-- Handle IDN/punycode conversion if needed (based on WHMCS provided values and Porkbun support).
+## Cache Admin Page
 
-Contact handling:
+- Cache status and manual cache controls are exposed through the companion addon module `Porkbun Cache Admin`.
+- In WHMCS admin, activate the addon from Setup > Addon Modules, then open it from the Addons menu.
+- The page shows cached domain count, cached record count, last cache row update, last full cache hydration, queue counts by status, and the last observed queue processor run.
+- `Generate Cache` performs an immediate `/domain/listAll` hydration using the stored registrar credentials and updates the shared cache in place.
+- `Clear Cache` removes cached rows but does not change the WHMCS automation cron schedule.
+- `Process Queue` runs queued refresh jobs immediately from the admin page.
+- `Automatic Queue Processing` confirms that the module hook is registered and explains that execution depends on the WHMCS automation cron.
+- `Next Queue Run` is displayed as a WHMCS-controlled schedule notice rather than a guessed timestamp; exact timing depends on the WHMCS automation cron configuration for the installation.
 
-- Map WHMCS contact arrays to Porkbun expected fields exactly.
-- Preserve optional fields only when present.
+## Admin Sync Button
 
-Nameserver handling:
+- A Registrar Commands button named `Sync Expiry and Status` is exposed in the WHMCS domain admin view.
+- The command runs a manual sync against Porkbun for domains transferred from another registrar.
+- The command always forces a fresh `/domain/listAll` registry read, so it never reuses a previously cached (possibly pre-renewal) expiry date.
+- The sync hydrates shared domain cache data from `/domain/listAll` and then resolves the requested domain from cache for expiry and status updates.
+- Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')`. A direct database write is used only when the Local API is unavailable (CLI/tests); it is not a recovery path for a failed Local API call.
+- Persisted fields:
+	- `expirydate` is written when a valid registry date is resolved.
+	- `nextduedate` is written only when the WHMCS `Sync Next Due Date` automation setting is enabled, as the expiry date minus the configured days-before-expiry offset.
+	- `status` is written as `Transferred Away` or `Cancelled` when the registry status indicates it, or as `Active` to reactivate a WHMCS domain currently marked `Expired`/`Cancelled`/`Transferred Away`.
+- If the WHMCS domain update fails, the command returns a safe error; sync outcomes are always logged regardless of the debug logging setting.
 
-- Respect WHMCS expected ns1..ns5 shape.
-- Convert empty values safely and avoid sending invalid hostname strings.
+## Documentation
 
-Error handling:
+- Development details: [DEVELOPMENT.md](DEVELOPMENT.md)
+- Live validation criteria: [TESTING.md](TESTING.md)
+- Roadmap and phase tracking: [TODO.md](TODO.md)
+- Release history: [CHANGELOG.md](CHANGELOG.md)
+- Contributor/agent rules: [AGENTS.md](AGENTS.md)
 
-- Centralize Porkbun API error translation to WHMCS-friendly messages.
-- Include request correlation data in logs where possible.
-- Never include API secrets in log output.
+## Core References
 
-Idempotency and retries:
+- WHMCS registrar docs: https://developers.whmcs.com/domain-registrars/
+- WHMCS sample registrar module: https://github.com/WHMCS/sample-registrar-module
+- WHMCS module logging docs: https://developers.whmcs.com/advanced/logging/
+- Porkbun API docs: https://porkbun.com/api/json/v3/documentation
+- Porkbun knowledge base: https://kb.porkbun.com/
 
-- Add conservative retry logic only for safe transient failures.
-- Avoid automatic retries for actions that can create side effects unless API guarantees idempotency.
+## Versioning
 
-## Security Requirements
-
-- Do not store API credentials outside WHMCS encrypted configuration fields.
-- Redact secrets and auth payloads from module logs.
-- Use TLS for all API requests.
-- Validate and sanitize all outbound fields.
-- Escape all user-facing output in admin/client templates if introduced later.
-
-## Logging and Troubleshooting
-
-WHMCS utility references:
-
-- Module logging docs: https://developers.whmcs.com/advanced/logging/
-
-Best practices:
-
-- Log operation name, domain, elapsed time, and sanitized API status.
-- Provide a single structured error message returned to WHMCS.
-- Keep debug mode optional and safe by default.
-
-Diagnostics implemented:
-
-- Each API request carries a generated correlation ID in request context.
-- API request context includes operation, endpoint, status code, latency, and correlation ID.
-- In-memory request metrics track success/failure counts and average latency per operation.
-
-## Development Workflow
-
-1. Confirm PHP and WHMCS versions match the compatibility matrix above.
-2. Build against the WHMCS sample registrar pattern and current WHMCS docs.
-3. Implement one operation at a time with consistent API client helpers.
-4. Validate each operation in a development WHMCS instance.
-5. Add regression checks for critical flows (register, transfer, renew, sync, nameservers).
-6. Prepare release notes with supported feature matrix and known gaps.
-
-## Coding Standards and Validation
-
-Coding standards:
-
-- Follow PSR-12 formatting and naming conventions for PHP code.
-- Keep WHMCS exported functions minimal and delegate logic into src/ classes.
-- Keep all secrets out of logs and user-visible error messages.
-
-Optional static analysis and style tools:
-
-- PHPCS with PSR-12 ruleset.
-- PHPStan at an initial practical level (for example level 5+).
-
-Baseline local validation commands:
-
-- php -l porkbun.php
-- find src -name "*.php" -print0 | xargs -0 -n1 php -l
-
-If PHPCS is installed:
-
-- phpcs --standard=PSR12 porkbun.php src
-
-If PHPStan is installed:
-
-- phpstan analyse porkbun.php src
-
-## Local Development Workflow
-
-1. Start from a clean branch and update docs/TODO task status before coding.
-2. Implement change in src/ first, then wire through porkbun.php exported function.
-3. Run baseline local validation commands.
-4. Test the target operation inside a WHMCS development instance.
-5. Capture edge cases and limitations in README before committing.
-
-## Testing Checklist
-
-- Module activates in WHMCS without warnings.
-- Credential validation fails clearly when invalid/missing.
-- Domain register succeeds and reports success to WHMCS.
-- Domain transfer handles EPP/auth code path correctly.
-- Renewal works for supported TLDs.
-- Nameserver get/save round-trips expected values.
-- Contact get/save round-trips expected values.
-- Registrar lock get/save behaves correctly when supported.
-- API failures produce friendly WHMCS errors and safe logs.
-
-## Versioning and Release
-
-- Use semantic versioning tags when possible.
-- Maintain a changelog section in release notes.
-- Document supported WHMCS versions and tested Porkbun API behavior.
-
-Release artifacts in this repository:
-
-- CHANGELOG.md (release notes and version history)
-
-## Deployment Instructions
-
-1. Prepare target folder in WHMCS:
-- modules/registrars/porkbun/
-2. Copy module files into that folder:
-- porkbun.php
-- src/ (all PHP files and operation handlers)
-3. In WHMCS admin, enable the Porkbun registrar module.
-4. Enter API Key and Secret API Key.
-5. Set timeout and optionally enable debug logging.
-6. Run the module Test Connection action.
-7. Run a domain sync in development and verify renewal date updates.
-
-## Initial Release Notes (Draft)
-
-See CHANGELOG.md for the initial release entry.
-
-Highlights for initial release:
-
-- Core lifecycle operations: register, transfer, renew.
-- Renewal date sync with guardrails for reminder/invoice integrity.
-- Nameserver and contact read/write support.
-- EPP and registrar-lock support.
-- Explicit unsupported behavior for DNS operations.
-- Structured sanitized logging and credential redaction.
-
-## Quick Start (Current Repo)
-
-1. Read AGENTS.md for implementation rules and coding workflow.
-2. Scaffold the registrar module functions in porkbun.php.
-3. Add a minimal API client with auth and request helper.
-4. Implement RegisterDomain first, then TransferDomain and RenewDomain.
-
-## Useful Links
-
-- WHMCS Domain Registrar Modules: https://developers.whmcs.com/domain-registrars/
-- WHMCS Sample Registrar Module: https://github.com/WHMCS/sample-registrar-module
-- WHMCS Logging: https://developers.whmcs.com/advanced/logging/
-- Porkbun API Docs: https://porkbun.com/api/json/v3/documentation
-- Porkbun Knowledge Base: https://kb.porkbun.com/
+- Releases should use semantic version tags.
+- Version history is tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Add your intended license here (for example, MIT) before first public release.
+Add your intended license before first public release.

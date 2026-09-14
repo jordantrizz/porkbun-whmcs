@@ -3,6 +3,8 @@
 namespace PorkbunWhmcs\Registrar\Operations;
 
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\DomainCache;
+use PorkbunWhmcs\Registrar\DomainRefreshQueue;
 
 final class GetNameserversOperation
 {
@@ -11,43 +13,63 @@ final class GetNameserversOperation
      *   success: bool,
      *   nameservers?: array<int, string>,
      *   details?: string,
+      *   warning?: string,
+      *   warningCode?: string,
      *   context?: array<string, mixed>,
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain): array
+    public static function execute(ApiClient $client, string $domain, ?int $refreshCooldownSeconds = null): array
     {
-        $endpoint = '/domain/getNs/' . $domain;
-        $response = $client->request('GetNameservers', $endpoint, []);
+        $normalizedDomain = strtolower(trim($domain));
+        $accountHash = $client->getCredentialFingerprint();
+        $endpoint = '/domain/getNs/' . $normalizedDomain;
+        $cached = DomainCache::get($accountHash, $normalizedDomain, 'nameservers');
 
-        if (($response['success'] ?? false) !== true) {
-            $error = is_array($response['error'] ?? null) ? $response['error'] : [];
+        if (is_array($cached)) {
+            $nameservers = self::normalizeNameservers($cached['value'] ?? null);
+            if ($nameservers !== []) {
+                $isStale = (string) ($cached['freshness'] ?? '') === 'stale';
+                $queued = false;
+                if ($isStale) {
+                    $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds, null, $normalizedDomain);
+                }
 
-            return [
-                'success' => false,
-                'details' => (string) ($error['message'] ?? 'Get nameservers request failed.'),
-                'context' => [
-                    'request' => $response['context'] ?? [],
-                    'errorType' => (string) ($error['type'] ?? 'unknown'),
-                    'statusCode' => (int) ($error['statusCode'] ?? 0),
-                ],
+                return [
+                    'success' => true,
+                    'nameservers' => $nameservers,
+                    'context' => [
+                        'request' => [
+                            'operation' => 'GetNameservers',
+                            'endpoint' => $endpoint,
+                        ],
+                        'count' => count($nameservers),
+                        'source' => $isStale ? 'cache-stale' : 'cache',
+                        'refreshQueued' => $queued,
+                    ],
+                    'request' => [
+                        'operation' => 'GetNameservers',
+                        'endpoint' => $endpoint,
+                        'payload' => [],
+                    ],
+                ];
+            }
+        }
+
+        $queued = DomainRefreshQueue::enqueue($accountHash, 'nameservers', $refreshCooldownSeconds, null, $normalizedDomain);
+
+        return [
+            'success' => false,
+            'details' => 'Nameserver cache is not populated yet. Refresh has been queued.',
+            'warning' => 'Nameserver cache refresh has been queued. Using existing WHMCS nameserver values.',
+            'warningCode' => 'CACHE_REFRESH_QUEUED',
+            'context' => [
                 'request' => [
                     'operation' => 'GetNameservers',
                     'endpoint' => $endpoint,
-                    'payload' => [],
                 ],
-            ];
-        }
-
-        $data = is_array($response['data'] ?? null) ? $response['data'] : [];
-        $nameservers = self::extractNameservers($data);
-
-        return [
-            'success' => true,
-            'nameservers' => $nameservers,
-            'context' => [
-                'request' => $response['context'] ?? [],
-                'count' => count($nameservers),
+                'source' => 'cache-miss',
+                'refreshQueued' => $queued,
             ],
             'request' => [
                 'operation' => 'GetNameservers',
@@ -59,41 +81,27 @@ final class GetNameserversOperation
 
     /**
      * @param array<string, mixed> $data
-     * @return array<int, string>
      */
-    private static function extractNameservers(array $data): array
+    private static function normalizeNameservers($value): array
     {
-        $candidates = [
-            $data['ns'] ?? null,
-            $data['nameservers'] ?? null,
-            $data['domain']['ns'] ?? null,
-            $data['domain']['nameservers'] ?? null,
-        ];
+        if (!is_array($value)) {
+            return [];
+        }
 
-        foreach ($candidates as $candidate) {
-            if (!is_array($candidate)) {
+        $normalized = [];
+        foreach ($value as $item) {
+            if (!is_string($item)) {
                 continue;
             }
 
-            $normalized = [];
-            foreach ($candidate as $item) {
-                if (!is_string($item)) {
-                    continue;
-                }
-
-                $value = trim($item);
-                if ($value === '') {
-                    continue;
-                }
-
-                $normalized[] = strtolower($value);
+            $candidate = strtolower(trim($item));
+            if ($candidate === '') {
+                continue;
             }
 
-            if ($normalized !== []) {
-                return array_values(array_unique($normalized));
-             }
-         }
+            $normalized[] = $candidate;
+        }
 
-         return [];
-     }
+        return array_values(array_unique($normalized));
+    }
  }

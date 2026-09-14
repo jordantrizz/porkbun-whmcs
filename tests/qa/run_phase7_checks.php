@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 define('WHMCS', true);
+define('ADMINAREA', true);
 require_once __DIR__ . '/../../porkbun.php';
 require_once __DIR__ . '/../../src/ApiClient.php';
+require_once __DIR__ . '/../../modules/addons/porkbun_cache_admin/porkbun_cache_admin.php';
 
 use PorkbunWhmcs\Registrar\ApiClient;
 
@@ -26,6 +28,20 @@ function addResult(array &$results, string $name, bool $passed, string $details 
 function assertContains(string $needle, string $haystack): bool
 {
     return stripos($haystack, $needle) !== false;
+}
+
+$GLOBALS['porkbunTestModuleLogCalls'] = [];
+
+if (!function_exists('logModuleCall')) {
+    function logModuleCall($module, $action, $request, $response, $replaceVars = '', $replaceVarsWith = ''): void
+    {
+        $GLOBALS['porkbunTestModuleLogCalls'][] = [
+            'module' => $module,
+            'action' => $action,
+            'request' => $request,
+            'response' => $response,
+        ];
+    }
 }
 
 $operationTests = [
@@ -86,6 +102,438 @@ if (function_exists('porkbun_TestConnection')) {
         'porkbun_TestConnection missing API key handling',
         $ok,
         $ok ? 'Returned expected missing API key error.' : ('Unexpected response: ' . json_encode($testConnectionResponse))
+    );
+}
+
+if (function_exists('porkbun_getConfigArray')) {
+    $config = porkbun_getConfigArray();
+    $hasStatusField = array_key_exists('lockCacheStatus', $config);
+    $hasRegistrarSettings = isset($config['apiKey'], $config['secretApiKey'], $config['lockCacheTtl'], $config['cacheRefreshCooldown']);
+    $ok = !$hasStatusField && $hasRegistrarSettings;
+
+    if (!$ok) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'porkbun_getConfigArray supported fields only',
+        $ok,
+        $ok ? 'Registrar config exposes supported settings fields without the unsupported status panel.' : ('Unexpected config array: ' . json_encode(array_keys($config)))
+    );
+}
+
+if (function_exists('porkbun_mapSyncResultToWhmcsStatus') && function_exists('porkbun_buildDomainSyncUpdate')) {
+    $statusCases = [
+        'transferredAway flag maps to Transferred Away' => [
+            ['transferredAway' => true],
+            'Active',
+            'Transferred Away',
+        ],
+        'cancelled flag maps to Cancelled' => [
+            ['cancelled' => true],
+            'Active',
+            'Cancelled',
+        ],
+        'active flag reactivates Expired domain' => [
+            ['active' => true],
+            'Expired',
+            'Active',
+        ],
+        'active flag reactivates Transferred Away domain' => [
+            ['active' => true],
+            'Transferred Away',
+            'Active',
+        ],
+        'active domain keeps Active status unchanged' => [
+            ['active' => true],
+            'Active',
+            null,
+        ],
+        'transferredAway takes precedence over active' => [
+            ['active' => true, 'transferredAway' => true],
+            'Active',
+            'Transferred Away',
+        ],
+    ];
+
+    foreach ($statusCases as $name => $case) {
+        [$syncResult, $currentStatus, $expected] = $case;
+        $actual = porkbun_mapSyncResultToWhmcsStatus($syncResult, $currentStatus);
+        $ok = $actual === $expected;
+
+        if (!$ok) {
+            $failures++;
+        }
+
+        addResult(
+            $results,
+            'Sync status mapping: ' . $name,
+            $ok,
+            $ok ? 'Mapped correctly.' : ('Expected ' . json_encode($expected) . ', got ' . json_encode($actual) . '.')
+        );
+    }
+
+    $flagCases = [
+        'missing status fails closed' => ['', ['active' => false, 'cancelled' => false, 'transferredAway' => false]],
+        'unknown status fails closed' => ['pending_review', ['active' => false, 'cancelled' => false, 'transferredAway' => false]],
+        'active status sets active only' => ['active', ['active' => true, 'cancelled' => false, 'transferredAway' => false]],
+        'cancelled status sets cancelled' => ['cancelled', ['active' => false, 'cancelled' => true, 'transferredAway' => false]],
+        'inactive status sets cancelled' => ['inactive', ['active' => false, 'cancelled' => true, 'transferredAway' => false]],
+        'transferred status sets transferredAway' => ['transferred away', ['active' => false, 'cancelled' => false, 'transferredAway' => true]],
+    ];
+
+    if (method_exists('PorkbunWhmcs\\Registrar\\Operations\\SyncDomainOperation', 'deriveStatusFlags')) {
+        foreach ($flagCases as $name => $case) {
+            [$status, $expectedFlags] = $case;
+            $actualFlags = \PorkbunWhmcs\Registrar\Operations\SyncDomainOperation::deriveStatusFlags($status);
+            $ok = $actualFlags === $expectedFlags;
+
+            if (!$ok) {
+                $failures++;
+            }
+
+            addResult(
+                $results,
+                'Sync flags: ' . $name,
+                $ok,
+                $ok ? 'Flags derived correctly.' : ('Expected ' . json_encode($expectedFlags) . ', got ' . json_encode($actualFlags) . '.')
+            );
+        }
+    }
+
+    $update = porkbun_buildDomainSyncUpdate(
+        ['expirydate' => '2027-01-01', 'cancelled' => true],
+        'Active',
+        0
+    );
+    $updateOk = ($update['expirydate'] ?? '') === '2027-01-01'
+        && ($update['nextduedate'] ?? '') === '2027-01-01'
+        && ($update['status'] ?? '') === 'Cancelled';
+
+    if (!$updateOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync update payload: expiry, next due date and cancelled status',
+        $updateOk,
+        $updateOk ? 'Payload carried expected expiry, next due date and status.' : ('Unexpected payload: ' . json_encode($update))
+    );
+
+    $offsetUpdate = porkbun_buildDomainSyncUpdate(['expirydate' => '2027-01-01', 'active' => true], 'Active', 7);
+    $offsetOk = ($offsetUpdate['nextduedate'] ?? '') === '2026-12-25';
+
+    if (!$offsetOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync update payload: next due date honors WHMCS offset',
+        $offsetOk,
+        $offsetOk ? 'Offset applied to next due date.' : ('Unexpected payload: ' . json_encode($offsetUpdate))
+    );
+
+    $activeUpdate = porkbun_buildDomainSyncUpdate(['expirydate' => '2027-01-01', 'active' => true], 'Active', null);
+    $activeUpdateOk = !array_key_exists('status', $activeUpdate)
+        && !array_key_exists('nextduedate', $activeUpdate)
+        && ($activeUpdate['expirydate'] ?? '') === '2027-01-01';
+
+    if (!$activeUpdateOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync update payload: active domain leaves status and due date alone',
+        $activeUpdateOk,
+        $activeUpdateOk ? 'Active domain produced an expiry-only update.' : ('Unexpected payload: ' . json_encode($activeUpdate))
+    );
+}
+
+if (function_exists('porkbun_applyDomainSyncUpdate')) {
+    $missingId = porkbun_applyDomainSyncUpdate(0, ['expirydate' => '2027-01-01']);
+    $missingIdOk = ($missingId['success'] ?? true) === false
+        && assertContains('missing whmcs domain id', (string) ($missingId['details'] ?? ''));
+
+    if (!$missingIdOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync apply: missing domain ID fails safely',
+        $missingIdOk,
+        $missingIdOk ? 'Rejected update without a domain ID.' : ('Unexpected response: ' . json_encode($missingId))
+    );
+
+    $noChange = porkbun_applyDomainSyncUpdate(123, []);
+    $noChangeOk = ($noChange['success'] ?? false) === true;
+
+    if (!$noChangeOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync apply: empty update is a successful no-op',
+        $noChangeOk,
+        $noChangeOk ? 'Empty update reported no required changes.' : ('Unexpected response: ' . json_encode($noChange))
+    );
+}
+
+$syncOperationClass = 'PorkbunWhmcs\\Registrar\\Operations\\SyncDomainOperation';
+if (class_exists($syncOperationClass) && method_exists($syncOperationClass, 'execute')) {
+    try {
+        $executeMethod = new \ReflectionMethod($syncOperationClass, 'execute');
+        $forceParam = null;
+        foreach ($executeMethod->getParameters() as $parameter) {
+            if ($parameter->getName() === 'forceRefresh') {
+                $forceParam = $parameter;
+                break;
+            }
+        }
+
+        $forceOk = $forceParam !== null
+            && $forceParam->isOptional()
+            && (string) $forceParam->getType() === 'bool';
+    } catch (\Throwable $exception) {
+        $forceOk = false;
+    }
+
+    if (!$forceOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync refresh: SyncDomainOperation supports forced refresh',
+        $forceOk,
+        $forceOk ? 'execute() accepts an optional bool $forceRefresh.' : 'execute() is missing the optional bool $forceRefresh parameter.'
+    );
+}
+
+if (function_exists('porkbun_logModuleCall') && function_exists('porkbun_syncnow')) {
+    $GLOBALS['porkbunTestModuleLogCalls'] = [];
+    porkbun_logModuleCall(
+        ['debugLogging' => 'off'],
+        'SyncForced',
+        ['operation' => 'SyncTest', 'apiKey' => 'pk1_secret'],
+        ['success' => true],
+        true
+    );
+
+    $forcedCalls = $GLOBALS['porkbunTestModuleLogCalls'];
+    $forcedCall = $forcedCalls[0] ?? [];
+    $forcedOk = count($forcedCalls) === 1
+        && ($forcedCall['action'] ?? '') === 'SyncForced'
+        && (string) (($forcedCall['request']['apiKey'] ?? '')) === '***redacted***';
+
+    if (!$forcedOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync logging: forced entry written when debug logging is off',
+        $forcedOk,
+        $forcedOk ? 'Forced sync log recorded with redacted credentials.' : ('Unexpected calls: ' . json_encode($forcedCalls))
+    );
+
+    $GLOBALS['porkbunTestModuleLogCalls'] = [];
+    porkbun_logModuleCall(
+        ['debugLogging' => 'off'],
+        'Gated',
+        ['operation' => 'GatedTest'],
+        ['success' => true]
+    );
+
+    $gatedOk = $GLOBALS['porkbunTestModuleLogCalls'] === [];
+
+    if (!$gatedOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync logging: non-forced entries stay gated by debug logging',
+        $gatedOk,
+        $gatedOk ? 'Gated call was not logged while debug logging is off.' : ('Unexpected calls: ' . json_encode($GLOBALS['porkbunTestModuleLogCalls']))
+    );
+
+    $GLOBALS['porkbunTestModuleLogCalls'] = [];
+    porkbun_logModuleCall(
+        ['debugLogging' => 'on'],
+        'DebugOn',
+        ['operation' => 'DebugOnTest'],
+        ['success' => true]
+    );
+
+    $debugOnOk = count($GLOBALS['porkbunTestModuleLogCalls']) === 1;
+
+    if (!$debugOnOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync logging: debug-enabled entries still written',
+        $debugOnOk,
+        $debugOnOk ? 'Debug-enabled call was logged.' : ('Unexpected calls: ' . json_encode($GLOBALS['porkbunTestModuleLogCalls']))
+    );
+
+    $GLOBALS['porkbunTestModuleLogCalls'] = [];
+    porkbun_syncnow(['sld' => 'example', 'tld' => 'com', 'debugLogging' => 'off']);
+
+    $syncNowActions = array_map(static function (array $call): string {
+        return (string) ($call['action'] ?? '');
+    }, $GLOBALS['porkbunTestModuleLogCalls']);
+    $syncNowOk = in_array('ManualSyncNow', $syncNowActions, true);
+
+    if (!$syncNowOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync logging: ManualSyncNow failure logs without debug logging',
+        $syncNowOk,
+        $syncNowOk ? 'Manual sync failure was logged while debug logging is off.' : ('Unexpected calls: ' . json_encode($GLOBALS['porkbunTestModuleLogCalls']))
+    );
+}
+
+$hydrateClass = 'PorkbunWhmcs\\Registrar\\Operations\\HydrateDomainCacheFromListAllOperation';
+if (class_exists($hydrateClass)) {
+    try {
+        $lockMethod = new \ReflectionMethod($hydrateClass, 'extractLockState');
+        $lockMethod->setAccessible(true);
+        $lockOn = $lockMethod->invoke(null, ['securityLock' => '1']);
+        $lockOff = $lockMethod->invoke(null, ['securityLock' => '0']);
+        $lockInt = $lockMethod->invoke(null, ['securityLock' => 1]);
+        $lockOk = $lockOn === true && $lockOff === false && $lockInt === true;
+    } catch (\Throwable $exception) {
+        $lockOk = false;
+    }
+
+    if (!$lockOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Cache hydration: securityLock maps to lock state',
+        $lockOk,
+        $lockOk ? 'securityLock 1/0 mapped to locked/unlocked.' : 'securityLock was not mapped to a lock boolean.'
+    );
+
+    try {
+        $dataMethod = new \ReflectionMethod($hydrateClass, 'extractDomainData');
+        $dataMethod->setAccessible(true);
+        $typed = $dataMethod->invoke(null, [
+            'status' => 'SUCCESS',
+            'count' => 1,
+            'domains' => [
+                [
+                    'domain' => 'Example.com',
+                    'status' => 'ACTIVE',
+                    'tld' => 'com',
+                    'createDate' => '2020-01-01 00:00:00',
+                    'expireDate' => '2027-03-04 12:00:00',
+                    'securityLock' => '1',
+                    'autoRenew' => '1',
+                ],
+            ],
+        ]);
+
+        $typedOk = is_array($typed)
+            && ($typed['example.com']['lock'] ?? null) === true
+            && ($typed['example.com']['sync']['expiryDate'] ?? '') === '2027-03-04 12:00:00'
+            && ($typed['example.com']['sync']['status'] ?? '') === 'ACTIVE'
+            && !array_key_exists('nameservers', $typed['example.com'] ?? []);
+    } catch (\Throwable $exception) {
+        $typedOk = false;
+        $typed = [];
+    }
+
+    if (!$typedOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Cache hydration: listAll maps lock and sync without nameservers',
+        $typedOk,
+        $typedOk ? 'listAll item mapped to lock + sync cache entries.' : ('Unexpected hydrated data: ' . json_encode($typed))
+    );
+}
+
+if (class_exists('PorkbunWhmcs\\Registrar\\Operations\\RefreshNameserversOperation')) {
+    $nsFromFlat = \PorkbunWhmcs\Registrar\Operations\RefreshNameserversOperation::extractNameservers([
+        'status' => 'SUCCESS',
+        'ns' => ['NS1.Example.com', ' ns2.example.net '],
+    ]);
+    $nsFromNested = \PorkbunWhmcs\Registrar\Operations\RefreshNameserversOperation::extractNameservers([
+        'domain' => ['nameservers' => ['a.example.test']],
+    ]);
+    $nsEmpty = \PorkbunWhmcs\Registrar\Operations\RefreshNameserversOperation::extractNameservers(['status' => 'SUCCESS']);
+
+    $nsOk = $nsFromFlat === ['ns1.example.com', 'ns2.example.net']
+        && $nsFromNested === ['a.example.test']
+        && $nsEmpty === [];
+
+    if (!$nsOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Nameserver refresh: getNs response normalization',
+        $nsOk,
+        $nsOk ? 'Flat and nested getNs payloads normalized correctly.' : ('Unexpected results: ' . json_encode([$nsFromFlat, $nsFromNested, $nsEmpty]))
+    );
+
+    $nsPublic = (new \ReflectionMethod(\PorkbunWhmcs\Registrar\Operations\RefreshNameserversOperation::class, 'extractNameservers'))->isPublic();
+
+    if (!$nsPublic) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Nameserver refresh: extraction is directly testable',
+        $nsPublic,
+        $nsPublic ? 'extractNameservers is public for cache-pipeline verification.' : 'extractNameservers is not public.'
+    );
+}
+
+if (function_exists('porkbun_cache_admin_output')) {
+    $_SESSION['token'] = 'phase7-session-token';
+    ob_start();
+    porkbun_cache_admin_output([
+        'modulelink' => 'addonmodules.php?module=porkbun_cache_admin',
+        'version' => defined('PORKBUN_MODULE_VERSION') ? PORKBUN_MODULE_VERSION : '0.1.0',
+        'token' => 'phase7-page-token',
+    ]);
+    $output = (string) ob_get_clean();
+    $hasAdminPage = assertContains('Porkbun Cache Admin', $output)
+        && assertContains('Generate Cache', $output)
+        && assertContains('Clear Cache', $output)
+        && assertContains('Process Queue', $output)
+        && assertContains('Automatic Queue Processing', $output)
+        && assertContains('phase7-page-token', $output)
+        && !assertContains('phase7-session-token', $output);
+
+    if (!$hasAdminPage) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'porkbun_cache_admin_output page rendering',
+        $hasAdminPage,
+        $hasAdminPage ? 'Rendered addon admin page with cache controls.' : ('Unexpected addon output: ' . $output)
     );
 }
 

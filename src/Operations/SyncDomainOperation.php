@@ -4,6 +4,7 @@ namespace PorkbunWhmcs\Registrar\Operations;
 
 use DateTimeImmutable;
 use PorkbunWhmcs\Registrar\ApiClient;
+use PorkbunWhmcs\Registrar\DomainCache;
 use PorkbunWhmcs\Registrar\Mapper;
 
 final class SyncDomainOperation
@@ -17,37 +18,84 @@ final class SyncDomainOperation
      *   previousExpiryDate?: string,
      *   guardrail?: string,
      *   active?: bool,
-     *   expired?: bool,
+     *   cancelled?: bool,
      *   transferredAway?: bool,
+     *   status?: string,
      *   context?: array<string, mixed>,
      *   request?: array<string, mixed>
      * }
      */
-    public static function execute(ApiClient $client, string $domain, ?string $previousExpiryDate): array
+    public static function execute(ApiClient $client, string $domain, ?string $previousExpiryDate, ?int $cacheTtlSeconds = null, bool $forceRefresh = false): array
     {
-        $endpoint = '/domain/get/' . $domain;
-        $response = $client->request('SyncDomain', $endpoint, []);
-        if (($response['success'] ?? false) !== true) {
-            $error = is_array($response['error'] ?? null) ? $response['error'] : [];
+        $normalizedDomain = strtolower(trim($domain));
+        $accountHash = $client->getCredentialFingerprint();
+        $ttl = $cacheTtlSeconds ?? DomainCache::defaultTtlSeconds();
 
+        $cachedRecord = DomainCache::get($accountHash, $normalizedDomain, 'sync');
+        $cached = (is_array($cachedRecord) && is_array($cachedRecord['value'] ?? null)) ? $cachedRecord['value'] : null;
+        $isStale = is_array($cachedRecord) && (string) ($cachedRecord['freshness'] ?? '') === 'stale';
+        $source = $isStale ? 'cache-stale' : 'cache';
+
+        if ($forceRefresh || $cached === null || $isStale) {
+            $startedAt = time();
+            $hydrated = HydrateDomainCacheFromListAllOperation::execute($client, $accountHash, $ttl);
+
+            if (($hydrated['success'] ?? false) !== true) {
+                if ($forceRefresh || $cached === null) {
+                    $errorContext = is_array($hydrated['context'] ?? null) ? $hydrated['context'] : [];
+
+                    return [
+                        'success' => false,
+                        'details' => (string) ($hydrated['details'] ?? 'Sync request failed.'),
+                        'context' => [
+                            'request' => $errorContext['request'] ?? [],
+                            'errorType' => (string) ($errorContext['errorType'] ?? 'unknown'),
+                            'statusCode' => (int) ($errorContext['statusCode'] ?? 0),
+                        ],
+                        'request' => [
+                            'operation' => 'SyncDomain',
+                            'endpoint' => '/domain/listAll',
+                            'payload' => [],
+                        ],
+                    ];
+                }
+            } else {
+                $freshRecord = DomainCache::get($accountHash, $normalizedDomain, 'sync');
+                $freshFetchedAt = is_array($freshRecord) ? (int) ($freshRecord['fetchedAt'] ?? 0) : 0;
+                $hasFreshValue = is_array($freshRecord)
+                    && is_array($freshRecord['value'] ?? null)
+                    && $freshFetchedAt >= $startedAt;
+
+                if ($hasFreshValue) {
+                    $cached = $freshRecord['value'];
+                    $source = 'live';
+                } elseif ($forceRefresh) {
+                    $cached = null;
+                }
+            }
+        }
+
+        if ($cached === null) {
             return [
                 'success' => false,
-                'details' => (string) ($error['message'] ?? 'Sync request failed.'),
+                'details' => 'Sync failed: domain was not returned by Porkbun domain list cache.',
                 'context' => [
-                    'request' => $response['context'] ?? [],
-                    'errorType' => (string) ($error['type'] ?? 'unknown'),
-                    'statusCode' => (int) ($error['statusCode'] ?? 0),
+                    'request' => [
+                        'operation' => 'SyncDomain',
+                        'endpoint' => '/domain/listAll',
+                    ],
+                    'errorType' => 'not_found',
+                    'statusCode' => 0,
                 ],
                 'request' => [
                     'operation' => 'SyncDomain',
-                    'endpoint' => $endpoint,
+                    'endpoint' => '/domain/listAll',
                     'payload' => [],
                 ],
             ];
         }
 
-        $data = is_array($response['data'] ?? null) ? $response['data'] : [];
-        $rawExpiryDate = self::extractExpiryDate($data);
+        $rawExpiryDate = self::extractExpiryDate($cached);
         $normalizedSourceDate = $rawExpiryDate !== null ? Mapper::toWhmcsDate($rawExpiryDate) : null;
 
         $normalizedPreviousDate = null;
@@ -68,12 +116,15 @@ final class SyncDomainOperation
                 'success' => false,
                 'details' => 'Sync failed: no valid expiry date was returned by registry.',
                 'context' => [
-                    'request' => $response['context'] ?? [],
+                    'request' => [
+                        'operation' => 'SyncDomain',
+                        'endpoint' => '/domain/listAll',
+                    ],
                     'rawExpiryDate' => $rawExpiryDate,
                 ],
                 'request' => [
                     'operation' => 'SyncDomain',
-                    'endpoint' => $endpoint,
+                    'endpoint' => '/domain/listAll',
                     'payload' => [],
                 ],
             ];
@@ -84,10 +135,11 @@ final class SyncDomainOperation
             $guardrail = 'stale_regression_protection';
         }
 
-        $status = self::extractStatus($data);
-        $transferredAway = self::isTransferredAway($status);
-        $active = !$transferredAway;
-        $expired = self::isExpired($syncedDate);
+        $status = self::extractStatus($cached);
+        $flags = self::deriveStatusFlags($status);
+        $transferredAway = $flags['transferredAway'];
+        $cancelled = $flags['cancelled'];
+        $active = $flags['active'];
 
         return [
             'success' => true,
@@ -96,15 +148,20 @@ final class SyncDomainOperation
             'previousExpiryDate' => $normalizedPreviousDate,
             'guardrail' => $guardrail,
             'active' => $active,
-            'expired' => $expired,
+            'cancelled' => $cancelled,
             'transferredAway' => $transferredAway,
+            'status' => $status,
             'context' => [
-                'request' => $response['context'] ?? [],
+                'request' => [
+                    'operation' => 'SyncDomain',
+                    'endpoint' => '/domain/listAll',
+                ],
                 'status' => $status,
+                'source' => $source,
             ],
             'request' => [
                 'operation' => 'SyncDomain',
-                'endpoint' => $endpoint,
+                'endpoint' => '/domain/listAll',
                 'payload' => [],
             ],
         ];
@@ -179,6 +236,28 @@ final class SyncDomainOperation
         return $cursor;
     }
 
+    /**
+     * Derives the WHMCS sync flags from a registry status.
+     *
+     * Unknown or empty statuses fail closed: no flag is set, so WHMCS leaves the
+     * domain status unchanged rather than reactivating it.
+     *
+     * @return array{active: bool, cancelled: bool, transferredAway: bool}
+     */
+    public static function deriveStatusFlags(string $status): array
+    {
+        return [
+            'active' => self::isActive($status),
+            'cancelled' => self::isCancelled($status),
+            'transferredAway' => self::isTransferredAway($status),
+        ];
+    }
+
+    private static function isActive(string $status): bool
+    {
+        return $status === 'active';
+    }
+
     private static function isTransferredAway(string $status): bool
     {
         if ($status === '') {
@@ -186,17 +265,17 @@ final class SyncDomainOperation
         }
 
         return str_contains($status, 'transfer')
-            || str_contains($status, 'away')
-            || str_contains($status, 'inactive')
-            || str_contains($status, 'cancel');
+            || str_contains($status, 'away');
     }
 
-    private static function isExpired(string $expiryDate): bool
+    private static function isCancelled(string $status): bool
     {
-        $expiry = new DateTimeImmutable($expiryDate . ' 23:59:59');
-        $now = new DateTimeImmutable('now');
+        if ($status === '') {
+            return false;
+        }
 
-        return $expiry < $now;
+        return str_contains($status, 'cancel')
+            || str_contains($status, 'inactive');
     }
 
     private static function isDestructiveRegression(string $previousDate, string $newDate): bool

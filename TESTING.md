@@ -25,12 +25,16 @@ This document tracks only the exit criteria that require live WHMCS and registra
 
 - [ ] WHMCS reminders align with synced renewal date.
 - [ ] Renewal invoice timing is correct after sync runs.
+- [ ] Admin `Sync Expiry and Status` button updates the WHMCS domain `expirydate` and status for a transferred domain.
+- [ ] Manual sync leaves `Active` domains' status unchanged and honors the WHMCS `Sync Next Due Date` setting.
 - [ ] Evidence captured for sync run plus reminder/invoice timing behavior.
 
 ## Phase 5 Exit Criteria (Live)
 
 - [ ] Nameserver read/write round-trips correctly.
 - [ ] Contact read/write round-trips correctly.
+- [ ] Registrar lock state hydrates from `/domain/listAll` `securityLock`.
+- [ ] Nameserver refresh uses `/domain/getNs/{domain}` and populates the cache.
 - [ ] Evidence captured for get/save + read-back verification.
 
 ## Phase 6 Exit Criteria (Live)
@@ -43,6 +47,11 @@ This document tracks only the exit criteria that require live WHMCS and registra
 
 - [ ] Critical regression suite passes.
 - [ ] No sensitive values observed in logs.
+- [ ] Porkbun Cache Admin addon page shows current cache and queue status without PHP warnings.
+- [ ] Generate Cache and Clear Cache actions behave correctly with valid and invalid credentials.
+- [ ] Process Queue action behaves correctly from the addon page.
+- [ ] Last observed queue run metadata updates after manual queue processing and WHMCS daily cron execution.
+- [ ] Upgrading over an existing install migrates `mod_porkbun_domain_refresh_queue` (adds `domain`, replaces the unique index) without manual SQL.
 - [ ] Evidence captured for each regression scenario and log redaction check.
 
 ## Phase 8 Exit Criteria (Release Validation)
