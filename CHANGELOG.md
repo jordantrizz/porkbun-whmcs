@@ -8,7 +8,7 @@ This changelog is generated from git release history and commit history.
 
 ### Added
 
-- Manual admin sync now persists synced expiry date and status to WHMCS through `UpdateClientDomain` (with a direct database fallback).
+- Manual admin sync now persists synced expiry date and status to WHMCS through `UpdateClientDomain` (direct database write only when the Local API is unavailable).
 - Sync outcomes are always written to the module log, even when `Enable Debug Logging` is off.
 
 ### Changed

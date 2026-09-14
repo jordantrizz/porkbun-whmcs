@@ -136,9 +136,10 @@ final class SyncDomainOperation
         }
 
         $status = self::extractStatus($cached);
-        $transferredAway = self::isTransferredAway($status);
-        $cancelled = self::isCancelled($status);
-        $active = !$transferredAway && !$cancelled;
+        $flags = self::deriveStatusFlags($status);
+        $transferredAway = $flags['transferredAway'];
+        $cancelled = $flags['cancelled'];
+        $active = $flags['active'];
 
         return [
             'success' => true,
@@ -233,6 +234,28 @@ final class SyncDomainOperation
         }
 
         return $cursor;
+    }
+
+    /**
+     * Derives the WHMCS sync flags from a registry status.
+     *
+     * Unknown or empty statuses fail closed: no flag is set, so WHMCS leaves the
+     * domain status unchanged rather than reactivating it.
+     *
+     * @return array{active: bool, cancelled: bool, transferredAway: bool}
+     */
+    public static function deriveStatusFlags(string $status): array
+    {
+        return [
+            'active' => self::isActive($status),
+            'cancelled' => self::isCancelled($status),
+            'transferredAway' => self::isTransferredAway($status),
+        ];
+    }
+
+    private static function isActive(string $status): bool
+    {
+        return $status === 'active';
     }
 
     private static function isTransferredAway(string $status): bool

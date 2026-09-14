@@ -110,7 +110,7 @@ Upgrade note: the first cache or queue operation after upgrading automatically m
 - The command runs a manual sync against Porkbun for domains transferred from another registrar.
 - The command always forces a fresh `/domain/listAll` registry read, so it never reuses a previously cached (possibly pre-renewal) expiry date.
 - The sync hydrates shared domain cache data from `/domain/listAll` and then resolves the requested domain from cache for expiry and status updates.
-- Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')` (with a direct database fallback).
+- Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')`. A direct database write is used only when the Local API is unavailable (CLI/tests); it is not a recovery path for a failed Local API call.
 - Persisted fields:
 	- `expirydate` is written when a valid registry date is resolved.
 	- `nextduedate` is written only when the WHMCS `Sync Next Due Date` automation setting is enabled, as the expiry date minus the configured days-before-expiry offset.

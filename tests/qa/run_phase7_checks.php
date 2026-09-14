@@ -174,6 +174,34 @@ if (function_exists('porkbun_mapSyncResultToWhmcsStatus') && function_exists('po
         );
     }
 
+    $flagCases = [
+        'missing status fails closed' => ['', ['active' => false, 'cancelled' => false, 'transferredAway' => false]],
+        'unknown status fails closed' => ['pending_review', ['active' => false, 'cancelled' => false, 'transferredAway' => false]],
+        'active status sets active only' => ['active', ['active' => true, 'cancelled' => false, 'transferredAway' => false]],
+        'cancelled status sets cancelled' => ['cancelled', ['active' => false, 'cancelled' => true, 'transferredAway' => false]],
+        'inactive status sets cancelled' => ['inactive', ['active' => false, 'cancelled' => true, 'transferredAway' => false]],
+        'transferred status sets transferredAway' => ['transferred away', ['active' => false, 'cancelled' => false, 'transferredAway' => true]],
+    ];
+
+    if (method_exists('PorkbunWhmcs\\Registrar\\Operations\\SyncDomainOperation', 'deriveStatusFlags')) {
+        foreach ($flagCases as $name => $case) {
+            [$status, $expectedFlags] = $case;
+            $actualFlags = \PorkbunWhmcs\Registrar\Operations\SyncDomainOperation::deriveStatusFlags($status);
+            $ok = $actualFlags === $expectedFlags;
+
+            if (!$ok) {
+                $failures++;
+            }
+
+            addResult(
+                $results,
+                'Sync flags: ' . $name,
+                $ok,
+                $ok ? 'Flags derived correctly.' : ('Expected ' . json_encode($expectedFlags) . ', got ' . json_encode($actualFlags) . '.')
+            );
+        }
+    }
+
     $update = porkbun_buildDomainSyncUpdate(
         ['expirydate' => '2027-01-01', 'cancelled' => true],
         'Active',

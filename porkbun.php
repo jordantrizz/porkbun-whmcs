@@ -1115,6 +1115,12 @@ function porkbun_buildDomainSyncUpdate(array $syncResult, ?string $currentStatus
 /**
  * Applies a sync update to the WHMCS domain record.
  *
+ * In the normal WHMCS runtime the supported Local API (`UpdateClientDomain`) is
+ * authoritative. The direct database write is only a fallback for contexts where
+ * the Local API is unavailable (CLI/tests); it deliberately does not run when the
+ * Local API exists but fails, because a raw write would bypass WHMCS validation
+ * and hooks.
+ *
  * @param array<string, string> $update
  * @return array{success: bool, details: string}
  */
@@ -1169,6 +1175,7 @@ function porkbun_applyDomainSyncUpdate(int $domainId, array $update): array
         ];
     }
 
+    // Local API unavailable (CLI/tests) only; not a recovery path for API failures.
     try {
         $capsule = '\\WHMCS\\Database\\Capsule';
         $capsule::table('tbldomains')->where('id', $domainId)->update($update);
@@ -1261,7 +1268,7 @@ function porkbun_syncnow(array $params): array
 
     if (($applyResult['success'] ?? false) !== true) {
         return porkbun_errorResponse(
-            'Operation failed: ManualSyncNow for ' . $domain . '. Reason: ' . ($applyResult['details'] ?? 'Unable to update WHMCS domain record.')
+            'Operation failed: ManualSyncNow for ' . $domain . '. Reason: Unable to update WHMCS domain record. See the module log for details.'
         );
     }
 

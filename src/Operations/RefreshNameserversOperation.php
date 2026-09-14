@@ -63,13 +63,30 @@ final class RefreshNameserversOperation
             ];
         }
 
-        DomainCache::put(
+        $cached = DomainCache::put(
             $client->getCredentialFingerprint(),
             $normalizedDomain,
             'nameservers',
             $nameservers,
             $cacheTtlSeconds
         );
+
+        if ($cached !== true) {
+            return [
+                'success' => false,
+                'details' => 'Nameserver refresh succeeded but the cache write failed.',
+                'context' => [
+                    'request' => $response['context'] ?? [],
+                    'errorType' => 'cache_write',
+                    'statusCode' => 0,
+                ],
+                'request' => [
+                    'operation' => 'RefreshNameservers',
+                    'endpoint' => $endpoint,
+                    'payload' => [],
+                ],
+            ];
+        }
 
         return [
             'success' => true,
