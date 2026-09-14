@@ -73,7 +73,7 @@ Guidance:
 - Sync maps registry expiry information from shared domain cache hydrated via `/domain/listAll` to WHMCS `expirydate` with regression guardrails.
 - Sync refreshes the `sync` cache from `/domain/listAll` when the entry is missing or stale, and accepts a `forceRefresh` flag that always bypasses cache; the manual admin sync passes `forceRefresh = true`.
 - Sync returns WHMCS-recognized `active`, `cancelled` and `transferredAway` flags (not `expired`) and maps registry `status` accordingly.
-- The manual sync command persists results via `localAPI('UpdateClientDomain')`, writing `expirydate`, optional `nextduedate`, and a mapped status.
+- The manual sync command persists results via `localAPI('UpdateClientDomain')`, writing `expirydate`, an optional `nextduedate` (expiry minus the WHMCS `Sync Next Due Date` offset), and a mapped status.
 - Registrar lock reads are cache-first and hydrated from `/domain/listAll` `securityLock`; nameserver reads are cache-first and refreshed per domain from `/domain/getNs/{domain}`.
 
 ## Domain Cache

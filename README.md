@@ -113,7 +113,7 @@ Upgrade note: the first cache or queue operation after upgrading automatically m
 - Unlike the WHMCS domain-sync cron, admin commands are not applied automatically by WHMCS, so the module persists the result itself through `localAPI('UpdateClientDomain')` (with a direct database fallback).
 - Persisted fields:
 	- `expirydate` is written when a valid registry date is resolved.
-	- `nextduedate` is written only when the WHMCS `Sync Next Due Date` automation setting is enabled.
+	- `nextduedate` is written only when the WHMCS `Sync Next Due Date` automation setting is enabled, as the expiry date minus the configured days-before-expiry offset.
 	- `status` is written as `Transferred Away` or `Cancelled` when the registry status indicates it, or as `Active` to reactivate a WHMCS domain currently marked `Expired`/`Cancelled`/`Transferred Away`.
 - If the WHMCS domain update fails, the command returns a safe error; sync outcomes are always logged regardless of the debug logging setting.
 

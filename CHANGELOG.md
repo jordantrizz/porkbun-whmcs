@@ -16,6 +16,7 @@ This changelog is generated from git release history and commit history.
 - Sync now returns the WHMCS-recognized `cancelled` and `transferredAway` status flags instead of the ignored `expired` key, and no longer forces `active` for cancelled domains.
 - Registrar lock cache hydration now reads Porkbun's `securityLock` field.
 - Nameserver cache refresh now fetches `/domain/getNs/{domain}` per domain; the refresh queue is domain-aware and migrates the queue table on upgrade.
+- Manual sync honors the WHMCS `Sync Next Due Date` offset (`DomainSyncNextDueDateDays`) when updating `nextduedate`, rather than setting it equal to the expiry date.
 - Removed the stale `/domain/listAll` nameserver extraction path.
 - Archived TODO roadmap into docs/BUILD.md (commit: bf26908).
 - Streamlined README and moved development-heavy content to DEVELOPMENT.md (commit: 0b701df).

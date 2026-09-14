@@ -177,7 +177,7 @@ if (function_exists('porkbun_mapSyncResultToWhmcsStatus') && function_exists('po
     $update = porkbun_buildDomainSyncUpdate(
         ['expirydate' => '2027-01-01', 'cancelled' => true],
         'Active',
-        true
+        0
     );
     $updateOk = ($update['expirydate'] ?? '') === '2027-01-01'
         && ($update['nextduedate'] ?? '') === '2027-01-01'
@@ -194,7 +194,21 @@ if (function_exists('porkbun_mapSyncResultToWhmcsStatus') && function_exists('po
         $updateOk ? 'Payload carried expected expiry, next due date and status.' : ('Unexpected payload: ' . json_encode($update))
     );
 
-    $activeUpdate = porkbun_buildDomainSyncUpdate(['expirydate' => '2027-01-01', 'active' => true], 'Active', false);
+    $offsetUpdate = porkbun_buildDomainSyncUpdate(['expirydate' => '2027-01-01', 'active' => true], 'Active', 7);
+    $offsetOk = ($offsetUpdate['nextduedate'] ?? '') === '2026-12-25';
+
+    if (!$offsetOk) {
+        $failures++;
+    }
+
+    addResult(
+        $results,
+        'Sync update payload: next due date honors WHMCS offset',
+        $offsetOk,
+        $offsetOk ? 'Offset applied to next due date.' : ('Unexpected payload: ' . json_encode($offsetUpdate))
+    );
+
+    $activeUpdate = porkbun_buildDomainSyncUpdate(['expirydate' => '2027-01-01', 'active' => true], 'Active', null);
     $activeUpdateOk = !array_key_exists('status', $activeUpdate)
         && !array_key_exists('nextduedate', $activeUpdate)
         && ($activeUpdate['expirydate'] ?? '') === '2027-01-01';

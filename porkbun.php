@@ -1020,20 +1020,45 @@ function porkbun_getCurrentDomainStatus(array $params, int $domainId): ?string
     return null;
 }
 
-function porkbun_shouldSyncNextDueDate(): bool
+/**
+ * Returns the WHMCS "Sync Next Due Date" offset in days, or null when disabled.
+ *
+ * WHMCS stores the offset in `DomainSyncNextDueDateDays` (days before expiry).
+ */
+function porkbun_getNextDueDateOffsetDays(): ?int
 {
     if (!class_exists('\\WHMCS\\Config\\Setting')) {
-        return false;
+        return null;
     }
 
     try {
         $setting = '\\WHMCS\\Config\\Setting';
-        $value = $setting::getValue('DomainSyncNextDueDate');
+        $enabled = $setting::getValue('DomainSyncNextDueDate');
+        if (!in_array(strtolower(trim((string) $enabled)), ['on', '1', 'yes', 'true'], true)) {
+            return null;
+        }
 
-        return in_array(strtolower(trim((string) $value)), ['on', '1', 'yes', 'true'], true);
+        $days = (int) $setting::getValue('DomainSyncNextDueDateDays');
+
+        return $days > 0 ? $days : 0;
     } catch (\Throwable $exception) {
-        return false;
+        return null;
     }
+}
+
+function porkbun_offsetDateDays(string $date, int $daysBefore): string
+{
+    try {
+        $base = new \DateTimeImmutable($date, new \DateTimeZone('UTC'));
+    } catch (\Throwable $exception) {
+        return $date;
+    }
+
+    if ($daysBefore <= 0) {
+        return $base->format('Y-m-d');
+    }
+
+    return $base->modify('-' . $daysBefore . ' days')->format('Y-m-d');
 }
 
 /**
@@ -1067,15 +1092,15 @@ function porkbun_mapSyncResultToWhmcsStatus(array $syncResult, ?string $currentS
  * @param array<string, mixed> $syncResult
  * @return array<string, string>
  */
-function porkbun_buildDomainSyncUpdate(array $syncResult, ?string $currentStatus = null, bool $updateNextDueDate = false): array
+function porkbun_buildDomainSyncUpdate(array $syncResult, ?string $currentStatus = null, ?int $nextDueDateOffsetDays = null): array
 {
     $update = [];
 
     $expiryDate = trim((string) ($syncResult['expirydate'] ?? ''));
     if ($expiryDate !== '') {
         $update['expirydate'] = $expiryDate;
-        if ($updateNextDueDate) {
-            $update['nextduedate'] = $expiryDate;
+        if ($nextDueDateOffsetDays !== null) {
+            $update['nextduedate'] = porkbun_offsetDateDays($expiryDate, $nextDueDateOffsetDays);
         }
     }
 
@@ -1207,7 +1232,7 @@ function porkbun_syncnow(array $params): array
     $update = porkbun_buildDomainSyncUpdate(
         $syncResult,
         $currentStatus,
-        porkbun_shouldSyncNextDueDate()
+        porkbun_getNextDueDateOffsetDays()
     );
     $applyResult = porkbun_applyDomainSyncUpdate($domainId, $update);
 
